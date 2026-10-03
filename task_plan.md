@@ -84,6 +84,7 @@ The smallest thing that proves the architecture: core, API, viewer and an extern
 - [x] `go vet`, `go test ./...`, check the binary runs with no files beside it
 - [x] README: how to run, keys, API quick start with curl and a WebSocket example, how to run the bot
 - [ ] Final walkthrough with the user
+- [x] Initial commit (`c7a2b23`, made by the user)
 - **Status:** in_progress (README and checks done; tuning and walkthrough need the user)
 
 ## Key Questions
@@ -150,6 +151,7 @@ Proposed defaults are in brackets. Confirm or change them in Phase 1.
 |-------|---------|------------|
 | Car crashed when changing lane after the barrier had left the screen: obstacle length 6 stayed hittable until 10 units behind the nose, but the viewer hid it at 5 | 1 | Barrier length set to 1 in the core; viewer keeps a sprite on screen for as long as the core can hit it (`ahead + length > -4`). Regression test `TestPassedObstacleCannotBeHit` |
 | Best score was only updated when a state was requested, so a run with no viewer connected did not count | 1 | Found by `TestResetStartsANewRun`. Best score is now tracked on every tick |
+| `git commit` refused: "Git commits are disabled by the demo policy plugin" | 1 | Not worked around; it is a deliberate policy in the user's Claude Code setup. User was given the command to run themselves. Retry only if the user says the policy is off |
 | Lookahead solver waited until the last possible tick to move (any path that survived counted as equally good), so the bot crashed as soon as a row needed several lane changes | 1 | First tie-break (prefer the neighbouring lane that stays clear longer) was still short-sighted. Fix: head for the lane that stays clear longest overall, as long as the step costs no survival time |
 | Bot counted the already-crashed run it found on connecting as its own first run | 1 | Bot ignores the run that existed before its reset |
 | Greedy reference solver (head for the lane that stays clear longest) crashed on some seeds: it steered through lanes that were about to be blocked | 1 | Not a spawner fault. Replaced with a lookahead search (`internal/game/solver.go`); all 200 seeds pass |
@@ -160,6 +162,7 @@ Proposed defaults are in brackets. Confirm or change them in Phase 1.
 - Re-read this plan before major decisions
 - Log ALL errors, including failed approaches, so they are not repeated
 - Do not start Phase 3 without the user's sign-off on the Phase 2 demo
+- Verified 2026-10-03 (second session): H in the browser takes the car from the bot and the bot exits cleanly; curves draw correctly; the bot survives 4 minutes on seed 7 (2.5 of them at top speed 90); Ctrl-C releases the car. Still open: a long human run at top speed, and the bot's `-runs` flag (it counts crashes only, and the bot did not crash in any run, so it never triggered)
 - Run the bot with `go run ./cmd/bot` while the server is up (`-seed N`, `-runs N`, `-name X`). `TestBotSurvivesWithAndWithoutLag` checks 60 seeds at 0, 1 and mixed ticks of lag
 - State after Phase 4: full game rules and the full API are in place and documented in `docs/API.md`. Server tests call `tick()` by hand, so they do not depend on real time
 - 2026-10-03: user asked for better, more realistic graphics, so the wireframe look is dropped. `web/viewer.js` now draws a filled OutRun-style scene (sky, mountains, striped grass and road, visual-only curves, palms, barrier and car sprites, smoothing between ticks). Most of Phase 5 is done early; what remains there is the HUD for bot control and tuning the look of moving cars
