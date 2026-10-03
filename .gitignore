@@ -1,0 +1,6 @@
+/outrun
+/bot
+/bin/
+*.test
+*.out
+.DS_Store
