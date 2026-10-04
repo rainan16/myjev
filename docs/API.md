@@ -22,6 +22,7 @@ The server refuses to start on anything but a loopback address, because the API 
   "tick_rate": 30,
   "pace": 1,
   "controller": "human",
+  "controller_status": "",
   "game_over": false,
   "lanes": 4,
   "lane": 1,
@@ -49,6 +50,7 @@ The server refuses to start on anything but a loopback address, because the API 
 | `tick_rate` | Ticks per second of game time. Speeds are per game second too |
 | `pace` | How fast the game's clock runs against the wall clock, above 0 up to 1. It is set with the server's `-pace` flag and fixed for the life of the server. A tick lasts `1 / (tick_rate * pace)` seconds: 33 ms at pace 1, 133 ms at 0.25. Nothing else changes: the same seed and inputs give the same run, tick for tick, at any pace, so scores can be compared across paces |
 | `controller` | Name of who is driving: `human` or the name a bot claimed with |
+| `controller_status` | A line of free text the driver has set about itself, or `""`. The viewer shows it under the driver's name. See "Status text" below |
 | `game_over` | `true` after a collision. The state is frozen until a reset |
 | `lane` | The car's lane |
 | `car_length` | Length of the player's car in world units |
@@ -85,6 +87,15 @@ A bot picks a name (1 to 32 printable characters, no spaces) and claims the car 
 - Changing the controller does not reset the run. Moves the previous driver had queued are dropped. Call reset for a clean run.
 - Anyone may reset, whoever is driving.
 
+### Status text
+
+The controller can publish one line of text about itself, for example what a bot is thinking or how long its decisions take. It is free text: the server does not interpret it.
+
+- Only the current controller can set it. From anyone else it is rejected like an input.
+- At most 80 characters, printable characters only (no line breaks or control characters). An empty text clears it.
+- It is cleared whenever the controller changes: on release, on a WebSocket disconnect, and when the human takes over. A reset keeps it.
+- It travels in the next state, so setting it more often than once per tick shows nothing extra. A few times a second is plenty.
+
 ## HTTP
 
 | Method and path | Body | Result |
@@ -95,16 +106,17 @@ A bot picks a name (1 to 32 printable characters, no spaces) and claims the car 
 | `POST /reset` | `{}` or `{"seed": 42}` | State object of the new run |
 | `POST /control/claim` | `{"name": "mybot"}` | `{"ok": true, "controller": "mybot"}` |
 | `POST /control/release` | `{"name": "mybot"}` | `{"ok": true, "controller": "human"}` |
+| `POST /control/status` | `{"text": "thinking", "name": "mybot"}` | `{"ok": true}` |
 
-`name` in `/input` is optional and defaults to `human`.
+`name` in `/input` and `/control/status` is optional and defaults to `human`.
 
 Errors come back as `{"ok": false, "error": "..."}`:
 
 | Status | Meaning |
 |--------|---------|
-| 400 | Malformed body, unknown action or invalid name |
+| 400 | Malformed body, unknown action, invalid name, or a status that is too long or not printable |
 | 403 | Browser request from another origin |
-| 409 | Not allowed right now: input or release from someone who is not driving, or a claim while another bot drives |
+| 409 | Not allowed right now: input, status or release from someone who is not driving, or a claim while another bot drives |
 
 ```sh
 curl -s localhost:8765/state
@@ -113,6 +125,7 @@ curl -s -X POST localhost:8765/reset -d '{"seed":42}'
 
 curl -s -X POST localhost:8765/control/claim   -d '{"name":"mybot"}'
 curl -s -X POST localhost:8765/input           -d '{"action":"left","name":"mybot"}'
+curl -s -X POST localhost:8765/control/status  -d '{"text":"thinking","name":"mybot"}'
 curl -s -X POST localhost:8765/control/release -d '{"name":"mybot"}'
 ```
 
@@ -132,9 +145,10 @@ Client to server:
 {"type": "input", "action": "left"}
 {"type": "reset", "seed": 42}
 {"type": "claim", "name": "mybot"}
+{"type": "status", "text": "thinking"}
 {"type": "release"}
 ```
 
-`seed` is optional. A connection steers as `human` until it claims; after a claim its inputs count under the claimed name, so no `name` is needed on `input`. On a rejected or malformed message the server replies `{"type": "error", "error": "..."}` and keeps the connection open. There is no reply on success; the next state shows the result.
+`seed` is optional. A connection steers as `human` until it claims; after a claim its inputs count under the claimed name, so no `name` is needed on `input` or `status`. On a rejected or malformed message the server replies `{"type": "error", "error": "..."}` and keeps the connection open. There is no reply on success; the next state shows the result.
 
 States come every `1 / (tick_rate * pace)` seconds. A slow client does not slow the game down: if it falls behind, older states are dropped and it receives the most recent one.

@@ -416,7 +416,10 @@
     ctx.fillText(`DRIVER ${state.controller}`, W - 16, 36);
     ctx.font = `13px ${FONT}`;
     ctx.fillStyle = "rgba(255,255,255,0.8)";
-    ctx.fillText(`seed ${state.seed}  run ${state.run_id}  pace ${state.pace || 1}`, W - 16, 60);
+    // What the driver says about itself goes under its name.
+    const status = state.controller_status || "";
+    if (status) ctx.fillText(status, W - 16, 60);
+    ctx.fillText(`seed ${state.seed}  run ${state.run_id}  pace ${state.pace || 1}`, W - 16, status ? 80 : 60);
     ctx.textAlign = "left";
     ctx.fillText(state.controller === "human" ? "K left   L right" : "H take over", 16, 60);
 

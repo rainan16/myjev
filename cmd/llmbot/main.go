@@ -64,6 +64,7 @@ func main() {
 		minConfidence: *minConfidence,
 		warm:          *warm,
 		verbose:       *verbose,
+		form:          *form,
 	}
 	switch *form {
 	case "digested":
@@ -97,6 +98,7 @@ type bot struct {
 	minConfidence float64
 	warm          bool
 	verbose       bool
+	form          string // "digested" or "raw", for the status text
 	build         func(game.State) prompt
 	model         decider
 
@@ -163,6 +165,18 @@ func (b *bot) warmUp(ctx context.Context) error {
 	return nil
 }
 
+// statusEvery is the least number of ticks between two status texts, so
+// the viewer's HUD is kept current without flooding the socket.
+const statusEvery = 15
+
+// statusText is what the viewer shows under the driver's name.
+func statusText(form string, d decision) string {
+	if !d.hasConfidence {
+		return fmt.Sprintf("%s  %d ms  no confidence", form, d.latency.Milliseconds())
+	}
+	return fmt.Sprintf("%s  %d ms  conf %.2f", form, d.latency.Milliseconds(), d.confidence)
+}
+
 // patience is how many ticks to wait for a sent move to show up before
 // deciding it was lost.
 const patience = 4
@@ -205,6 +219,9 @@ func (b *bot) loop(ctx context.Context) error {
 		crashed   bool
 		restart   <-chan time.Time
 		lastLine  string // what the last log line said, without the numbers
+
+		lastStatus string
+		statusTick int // tick at which the last status was sent
 
 		asking    bool // a question is open
 		askedTick = -1 // tick of the state the last question was about
@@ -281,6 +298,12 @@ func (b *bot) loop(ctx context.Context) error {
 				lastLine = line
 				log.Print(decisionLine(a, latest.Tick-a.tick, b.shown(a), o))
 			}
+			if text := statusText(b.form, a.decision); text != lastStatus && latest.Tick >= statusTick+statusEvery {
+				if err := b.send(ctx, map[string]any{"type": "status", "text": text}); err != nil {
+					return err
+				}
+				lastStatus, statusTick = text, latest.Tick
+			}
 			ask()
 
 		case m := <-msgs:
@@ -314,6 +337,7 @@ func (b *bot) loop(ctx context.Context) error {
 					log.Printf("llmbot: %s", st.summary(latest, false, time.Since(started), runnerRSS()))
 				}
 				run, crashed, waiting, lastLine = s.RunID, false, false, ""
+				statusTick = -statusEvery // ticks start over with the run
 				st, started = &stats{}, time.Now()
 				log.Printf("llmbot: run %d, seed %d", s.RunID, s.Seed)
 			}

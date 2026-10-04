@@ -353,6 +353,16 @@ func TestSummaryReportsRateLatencyAndStaleShare(t *testing.T) {
 	}
 }
 
+func TestStatusTextNamesStateFormLatencyAndConfidence(t *testing.T) {
+	d := decision{action: "left", hasConfidence: true, confidence: 0.934, latency: 21 * time.Millisecond}
+	if got := statusText("digested", d); got != "digested  21 ms  conf 0.93" {
+		t.Errorf("status = %q", got)
+	}
+	if got := statusText("raw", decision{latency: 248 * time.Millisecond}); got != "raw  248 ms  no confidence" {
+		t.Errorf("status without confidence = %q", got)
+	}
+}
+
 func TestRunnerMemoryIsReadFromTheRunnerProcess(t *testing.T) {
 	ps := `  41152 ollama serve
 5327392 /opt/homebrew/Cellar/ollama/0.35.1_1/libexec/lib/ollama/llama-server --model /Users/x/.ollama/models/blobs/sha256-6dd7 --port 51234

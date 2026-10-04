@@ -41,7 +41,7 @@ Plan: `task_plan_tev.md`. Branch: `tev-vs-gemma`.
   - `task_plan_tev.md`, `findings.md`, `progress.md`
 
 ### Phase 4: Clock pace in the server
-- **Status:** built and run, waiting for the user's approval
+- **Status:** complete, approved by the user
 - **Started:** 2026-10-04
 - Actions taken:
   - `-pace` flag, `Server.SetPace`, `tickInterval`, `pace` in the state, viewer smoothing and HUD, docs
@@ -49,6 +49,16 @@ Plan: `task_plan_tev.md`. Branch: `tev-vs-gemma`.
 - Files created/modified:
   - `cmd/outrun/main.go`, `internal/server/server.go`, `internal/server/server_test.go`, `web/viewer.js`, `docs/API.md`, `README.md`
   - `cmd/llmbot/main.go`, `cmd/llmbot/stats.go`, `cmd/llmbot/llmbot_test.go` (pace in the summary)
+
+### Phase 5: Status text in the HUD
+- **Status:** built and run, waiting for the user's approval
+- **Started:** 2026-10-04
+- Actions taken:
+  - `status` WebSocket message, `POST /control/status`, `controller_status` in the state, cleared on any change of controller
+  - Viewer draws it under the driver name; `llmbot` publishes state form, latency and confidence
+- Files created/modified:
+  - `internal/server/server.go`, `internal/server/server_test.go`, `web/viewer.js`, `docs/API.md`, `README.md`
+  - `cmd/llmbot/main.go`, `cmd/llmbot/llmbot_test.go`
 
 ## Test Results
 | Test | Input | Expected | Actual | Status |
@@ -79,8 +89,8 @@ Plan: `task_plan_tev.md`. Branch: `tev-vs-gemma`.
 ## 5-Question Reboot Check
 | Question | Answer |
 |----------|--------|
-| Where am I? | Phase 4 built, waiting for approval |
-| Where am I going? | 5 status text, 6 quick look |
+| Where am I? | Phase 5 built, waiting for approval |
+| Where am I going? | 6 quick look and write-up |
 | What's the goal? | `cmd/llmbot` lets Tev and Gemma drive so speed, RAM and harness can be compared |
 | What have I learned? | See findings.md |
 | What have I done? | See above |

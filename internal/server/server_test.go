@@ -279,6 +279,95 @@ func TestHumanCanTakeOverAndPendingMovesAreDropped(t *testing.T) {
 	}
 }
 
+func TestOnlyTheControllerSetsTheStatus(t *testing.T) {
+	_, ts := newTestServer(t)
+	if got := getState(t, ts).ControllerStatus; got != "" {
+		t.Fatalf("status at start = %q", got)
+	}
+	if code, _ := post(t, ts, "/control/status", `{"text":"hello","name":"bot"}`); code != 409 {
+		t.Fatalf("status from a bot that has not claimed: %d, want 409", code)
+	}
+	post(t, ts, "/control/claim", `{"name":"bot"}`)
+	if code, _ := post(t, ts, "/control/status", `{"text":"hello"}`); code != 409 {
+		t.Fatalf("status from the human while the bot drives: %d, want 409", code)
+	}
+	if got := getState(t, ts).ControllerStatus; got != "" {
+		t.Fatalf("a rejected status was kept: %q", got)
+	}
+	if code, r := post(t, ts, "/control/status", `{"text":"digested  21 ms  conf 0.93","name":"bot"}`); code != 200 || !r.OK {
+		t.Fatalf("status from the controller: %d %+v", code, r)
+	}
+	if got := getState(t, ts).ControllerStatus; got != "digested  21 ms  conf 0.93" {
+		t.Fatalf("status = %q", got)
+	}
+	if code, _ := post(t, ts, "/control/status", `{"text":"","name":"bot"}`); code != 200 {
+		t.Fatalf("clearing the status: %d", code)
+	}
+	if got := getState(t, ts).ControllerStatus; got != "" {
+		t.Fatalf("status after clearing = %q", got)
+	}
+	if code, _ := post(t, ts, "/control/status", `{"text":"x","name":"bot"}`, "Origin", "http://evil.example"); code != 403 {
+		t.Fatalf("cross-origin status: %d, want 403", code)
+	}
+}
+
+func TestStatusMustBeShortAndPrintable(t *testing.T) {
+	_, ts := newTestServer(t)
+	for name, text := range map[string]string{
+		"too long":     strings.Repeat("x", maxStatusLength+1),
+		"newline":      "two\nlines",
+		"control char": "bell\u0007",
+		"escape":       "\u001b[31mred",
+	} {
+		if code, _ := post(t, ts, "/control/status", `{"text":"`+text+`"}`); code != 400 {
+			t.Errorf("%s: %d, want 400", name, code)
+		}
+	}
+	if got := getState(t, ts).ControllerStatus; got != "" {
+		t.Fatalf("a rejected status was kept: %q", got)
+	}
+	longest := strings.Repeat("é", maxStatusLength)
+	if code, _ := post(t, ts, "/control/status", `{"text":"`+longest+`"}`); code != 200 {
+		t.Fatalf("%d characters: %d, want 200", maxStatusLength, code)
+	}
+	if got := getState(t, ts).ControllerStatus; got != longest {
+		t.Fatalf("status = %q", got)
+	}
+}
+
+func TestStatusIsClearedWhenTheControllerChanges(t *testing.T) {
+	s, ts := newTestServer(t)
+	set := func() {
+		t.Helper()
+		post(t, ts, "/control/claim", `{"name":"bot"}`)
+		if code, _ := post(t, ts, "/control/status", `{"text":"thinking","name":"bot"}`); code != 200 {
+			t.Fatalf("set status: %d", code)
+		}
+	}
+
+	set()
+	post(t, ts, "/control/release", `{"name":"bot"}`)
+	if got := getState(t, ts).ControllerStatus; got != "" {
+		t.Fatalf("status after release = %q", got)
+	}
+
+	set()
+	post(t, ts, "/control/claim", `{"name":"human"}`)
+	if got := getState(t, ts).ControllerStatus; got != "" {
+		t.Fatalf("status after the human took over = %q", got)
+	}
+
+	// A reset or a repeated claim does not change the driver, so the
+	// status stays.
+	set()
+	post(t, ts, "/control/claim", `{"name":"bot"}`)
+	post(t, ts, "/reset", `{}`)
+	s.tick()
+	if got := getState(t, ts).ControllerStatus; got != "thinking" {
+		t.Fatalf("status after reset = %q, want it kept", got)
+	}
+}
+
 // --- WebSocket ---
 
 type wsMsg struct {
@@ -445,4 +534,36 @@ func TestWebSocketRejectsOtherOrigins(t *testing.T) {
 	if resp == nil || resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("expected 403, got %v", resp)
 	}
+}
+
+func TestWebSocketStatusIsShownAndClearedOnDisconnect(t *testing.T) {
+	s, ts := newTestServer(t)
+	bot := dial(t, ts)
+	viewer := dial(t, ts)
+
+	send(t, viewer, `{"type":"status","text":"me too"}`)
+	waitFor(t, "the human's status to be set", func() bool { return s.state().ControllerStatus == "me too" })
+
+	send(t, bot, `{"type":"claim","name":"bot"}`)
+	waitFor(t, "bot to drive", func() bool { return s.controllerName() == "bot" })
+	if got := s.state().ControllerStatus; got != "" {
+		t.Fatalf("the human's status survived the claim: %q", got)
+	}
+
+	send(t, viewer, `{"type":"status","text":"not mine to set"}`)
+	readUntil(t, viewer, "error for a status from the viewer", func(m wsMsg) bool { return m.Type == "error" })
+	send(t, bot, `{"type":"status","text":"bad\u0007text"}`)
+	readUntil(t, bot, "error for an unprintable status", func(m wsMsg) bool { return m.Type == "error" })
+
+	send(t, bot, `{"type":"status","text":"digested  21 ms"}`)
+	waitFor(t, "the bot's status to be set", func() bool { return s.state().ControllerStatus == "digested  21 ms" })
+	s.tick()
+	readUntil(t, viewer, "viewer to see the status", func(m wsMsg) bool {
+		return m.Type == "state" && m.State.ControllerStatus == "digested  21 ms"
+	})
+
+	bot.CloseNow()
+	readUntil(t, viewer, "status to be cleared with the driver gone", func(m wsMsg) bool {
+		return m.Type == "state" && m.State.Controller == "human" && m.State.ControllerStatus == ""
+	})
 }

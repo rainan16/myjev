@@ -13,7 +13,7 @@ A new bot, `cmd/llmbot`, lets the local Ollama models `tev1:0.8b`, `tev1:4b` and
 This is a hands-on quick look, not a benchmark.
 
 ## Current Phase
-Phase 4 (waiting for approval)
+Phase 5 (waiting for approval)
 
 ## Phases
 
@@ -58,18 +58,18 @@ A small server change plus one new state field. The game core is not touched.
 - [x] Server test with `httptest` that the state carries the pace, and a test of the interval calculation; no sleeping
 - [x] `docs/API.md` and `README.md` updated in the same change
 - [x] `go vet ./...`, `gofmt -l .`, `go test -race ./...`
-- **Status:** built and run; waiting for the user's approval
+- **Status:** complete (approved 2026-10-04)
 
 ### Phase 5: Status text in the HUD
 An API change: docs and README move in the same change.
-- [ ] WebSocket message `{"type":"status","text":"..."}` and an HTTP twin, accepted only from the current controller; 409 or `error` otherwise
-- [ ] Length cap, printable characters only; cleared on release, disconnect and controller change
-- [ ] State gains `controller_status`
-- [ ] Viewer draws it under the driver name (restart the server after editing `web/`)
-- [ ] Server tests with `tick()` and `httptest`, named after the behaviour; `go test -race ./...`
-- [ ] `docs/API.md` and `README.md` updated
-- [ ] `llmbot` publishes latency, confidence and state form as status, at a rate that does not flood the socket
-- **Status:** pending
+- [x] WebSocket message `{"type":"status","text":"..."}` and an HTTP twin, accepted only from the current controller; 409 or `error` otherwise
+- [x] Length cap, printable characters only; cleared on release, disconnect and controller change
+- [x] State gains `controller_status`
+- [x] Viewer draws it under the driver name (restart the server after editing `web/`)
+- [x] Server tests with `tick()` and `httptest`, named after the behaviour; `go test -race ./...`
+- [x] `docs/API.md` and `README.md` updated
+- [x] `llmbot` publishes latency, confidence and state form as status, at a rate that does not flood the socket
+- **Status:** built and run; waiting for the user's approval
 
 ### Phase 6: Quick look and write-up
 - [ ] Pick the seed and the run length (Key Question 7)
@@ -124,6 +124,10 @@ Proposed answers in brackets. Numbers 1 and 2 block Phase 2; the rest can be set
 | Back to the Phase 2 wording: no `blocked later`, the short instruction. `-warm` is off by default (user, 2026-10-04) | The Phase 3 runs were no better with `blocked later` and worse for 0.8b; warm-up only helps 0.8b |
 | The pace is set with `Server.SetPace` before `Run` and cannot change while the server runs | A fixed pace per server run keeps a run's numbers attributable to one pace |
 | `llmbot` prints the pace in its run summary | The pace a model needs is the finding, so it belongs next to the result |
+| The HTTP twin is `POST /control/status`; the cap is 80 characters, `unicode.IsPrint` decides what is printable, and an empty text clears | Sits with claim and release; 80 fits one HUD line |
+| A reset keeps the status; only a change of controller clears it | The driver is the same after a reset |
+| Setting the status does not broadcast; it travels in the next tick's state | A chatty driver cannot flood the viewers |
+| `llmbot` sends its status at most every 15 ticks and only when the text changed | About two a second at pace 1.0 |
 | This plan lives in `task_plan_tev.md`; `task_plan.md` is left as the game's plan | The existing plan is the project's memory and must not be overwritten |
 
 ## Errors Encountered
