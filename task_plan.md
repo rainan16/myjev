@@ -10,7 +10,7 @@
 A single local Go binary runs a raw, wireframe OutRun-style game (4 lanes, K = left, L = right, dodge cars and obstacles) whose headless core exposes a WebSocket + HTTP API on 127.0.0.1, so a human in the embedded web viewer or an external program can play it and watch it in real time, with a sample Go bot included.
 
 ## Current Phase
-Phase 7 (Phases 1 to 6 complete; Phase 5 was finished early when the user asked for better graphics)
+Complete (2026-10-04). All seven phases are done
 
 ## Target layout
 
@@ -80,12 +80,12 @@ The smallest thing that proves the architecture: core, API, viewer and an extern
 - **Status:** complete
 
 ### Phase 7: Tuning and delivery
-- [ ] Tune tick rate, speed ramp and spawn spacing by playing as a human (waiting for the user's feedback after playing)
+- [x] Tune tick rate, speed ramp and spawn spacing (2026-10-04: the user removed the speed cap and raised the start speed to 50; tick rate, row spacing, tight rows and the share of cars were left as they are)
 - [x] `go vet`, `go test ./...`, check the binary runs with no files beside it
 - [x] README: how to run, keys, API quick start with curl and a WebSocket example, how to run the bot
-- [ ] Final walkthrough with the user
+- [x] Final walkthrough with the user (2026-10-04)
 - [x] Initial commit (`c7a2b23`, made by the user)
-- **Status:** in_progress (README and checks done; tuning and walkthrough need the user)
+- **Status:** complete. Known loose ends, not asked for: `cmd/bot` can still hit the start-up race that was fixed in `cmd/llmbot`, and its `-runs` flag counts crashes, which do not happen
 
 ## Key Questions
 Proposed defaults are in brackets. Confirm or change them in Phase 1.
@@ -112,6 +112,10 @@ Proposed defaults are in brackets. Confirm or change them in Phase 1.
 | 4 discrete lanes, key press = one lane change | Simple and easy for bots; user's explicit choice over continuous steering |
 | WebSocket stream + HTTP endpoints | Real-time push for bots and viewer, curl-friendly for poking |
 | Real-time tick loop only, no step mode | User's choice; accepted that bot latency affects outcomes |
+| The game's clock can be slowed with `-pace` (above 0 up to 1); the core, the speeds and the spacing are untouched, and the state reports `pace` | 2026-10-04, from the Tev and Gemma task. Every driver plays the same game tick for tick, so scores compare across paces. Scaling the car's speeds instead was rejected: it makes a different game per scale and the fairness tests would have to be rerun |
+| The pace is fixed for the life of the server | A run's numbers belong to one pace |
+| The controller can publish one line of free text (`status` message, `POST /control/status`, `controller_status` in the state); the server does not interpret it; cleared when the controller changes, kept across a reset | 2026-10-04. Lets a bot show what it is doing in the HUD without putting any bot's vocabulary into the API |
+| Setting a status does not broadcast; it goes out with the next tick | A chatty driver cannot flood the viewers |
 | One active controller, switchable via API | Human and bot never fight over the car |
 | State = structured objects plus lookahead lane grid | Usable by both simple and smarter bots |
 | Action = left / right / none | Bot plays exactly the game a human plays |
@@ -130,6 +134,8 @@ Proposed defaults are in brackets. Confirm or change them in Phase 1.
 | A moving car is only placed if it would not be seen driving through a barrier in its lane; otherwise that slot becomes a barrier | Resolves the "cars catch up with obstacles" risk. The same test checks that no two obstacles ever overlap |
 | All traffic drives at one speed (20), below the start speed (40) | Traffic never interacts with other traffic and is always overtaken |
 | Speed 40 to 90 over 90 s, row spacing 60 to 110 units, 15% of rows leave a single open lane, half of obstacles are cars | First values; to be tuned by hand in Phase 7 |
+| Speed has no upper limit: it reaches 90 after 90 s and keeps rising at the same rate (`MaxSpeed` became `RampSpeed`) (user, 2026-10-04) | User's tuning choice in Phase 7. Layouts are unchanged for the first 2,300 ticks (checked on 60 seeds), so earlier seed 7 results still compare. Fairness holds because rows are at least 12 ticks apart whatever the speed; the solver survived 60 minutes (speed about 2,040) on 40 seeds in a one-off probe, and `TestSolverSurvivesEverySeed` still covers 200 seeds to speed 157 |
+| Start speed 50, not 40; the rate of gain is unchanged, so the speed is 100 after 90 s (`StartSpeed` 50, `RampSpeed` 100) (user, 2026-10-04) | User's tuning choice in Phase 7. Every layout changes, so results measured on seed 7 before this (README table, tick 836) are not comparable with new runs. The two `llmbot` regression tests pin the old config. Fairness tests pass, now to speed 167 |
 | State gained `tick_rate`, `car_length` and per-obstacle `speed` | A bot needs them to predict when an obstacle is reached |
 | `game.Solve` is the reference player: 60-tick lookahead search over the public observation | Used by the fairness test; reuse it for the sample bot in Phase 6 |
 | Control rules: a bot claims only from `human` (or repeats its own claim); `human` can always claim back (viewer key H); release or WebSocket disconnect returns control to `human`; anyone may reset | Keeps "one driver at a time" without locking the human out |
@@ -154,6 +160,7 @@ Proposed defaults are in brackets. Confirm or change them in Phase 1.
 | `git commit` refused: "Git commits are disabled by the demo policy plugin" | 1 | Not worked around; it is a deliberate policy in the user's Claude Code setup. User was given the command to run themselves. Retry only if the user says the policy is off |
 | Lookahead solver waited until the last possible tick to move (any path that survived counted as equally good), so the bot crashed as soon as a row needed several lane changes | 1 | First tie-break (prefer the neighbouring lane that stays clear longer) was still short-sighted. Fix: head for the lane that stays clear longest overall, as long as the step costs no survival time |
 | Bot counted the already-crashed run it found on connecting as its own first run | 1 | Bot ignores the run that existed before its reset |
+| A bot that takes the first state it receives as "the run before mine" can hang: the server keeps only the newest state for a slow connection, so the greeting state may be replaced by one from after the bot's own reset. Seen once with `cmd/llmbot` (claimed the car, then never played) | 1 | `cmd/llmbot` now resets only after a state shows it driving and plays the run after that. `cmd/bot` still uses the old way and can hit the same race; not changed yet |
 | Greedy reference solver (head for the lane that stays clear longest) crashed on some seeds: it steered through lanes that were about to be blocked | 1 | Not a spawner fault. Replaced with a lookahead search (`internal/game/solver.go`); all 200 seeds pass |
 | Still crashed on an invisible barrier (state showed `ahead: -6`, length 1, no overlap with the car). First fix was incomplete | 2 | Real cause: the collision sweep started at the previous tick's rear edge, so a lane change hit a barrier up to one tick behind the car. Sweep now covers only the car's current body. The first regression test steered in one tick too late to catch it; it now steers on the exact tick, across 20 seeds |
 
@@ -167,4 +174,5 @@ Proposed defaults are in brackets. Confirm or change them in Phase 1.
 - State after Phase 4: full game rules and the full API are in place and documented in `docs/API.md`. Server tests call `tick()` by hand, so they do not depend on real time
 - 2026-10-03: user asked for better, more realistic graphics, so the wireframe look is dropped. `web/viewer.js` now draws a filled OutRun-style scene (sky, mountains, striped grass and road, visual-only curves, palms, barrier and car sprites, smoothing between ticks). Most of Phase 5 is done early; what remains there is the HUD for bot control and tuning the look of moving cars
 - Done in Phase 3: anything alongside the car is marked in grid row 0. A traffic car being overtaken stays drawn at the bottom edge of the screen until it can no longer be hit
+- 2026-10-04: a follow-on task (local models Tev and Gemma driving the game, with a `-pace` flag and a driver status text) has its own plan in `task_plan_tev.md`, decisions in `intent_decisions_answers_tev.md`
 - Run with `go run ./cmd/outrun` and open http://127.0.0.1:8765. The viewer is embedded at build time, so restart after editing `web/`

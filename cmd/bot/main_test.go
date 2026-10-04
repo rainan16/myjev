@@ -34,7 +34,7 @@ func drive(seed uint64, ticks int, delay func(tick int) int) (survived int, cras
 
 func TestBotSurvivesWithAndWithoutLag(t *testing.T) {
 	cfg := game.DefaultConfig()
-	ticks := (int(cfg.RampSeconds) + 60) * cfg.TickRate
+	ticks := 150 * cfg.TickRate
 	rng := rand.New(rand.NewPCG(1, 2))
 	cases := map[string]func(int) int{
 		"move lands on the next tick":  func(int) int { return 0 },

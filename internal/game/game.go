@@ -45,10 +45,11 @@ type Config struct {
 	Lanes    int
 	TickRate int // ticks per second
 
-	// The car speeds up linearly from StartSpeed to MaxSpeed over
-	// RampSeconds, then holds. Speeds are in world units per second.
+	// The car starts at StartSpeed, reaches RampSpeed after RampSeconds
+	// and keeps gaining speed at that rate, without a limit. Speeds are
+	// in world units per second.
 	StartSpeed  float64
-	MaxSpeed    float64
+	RampSpeed   float64
 	RampSeconds float64
 
 	CarLength      float64
@@ -75,8 +76,8 @@ func DefaultConfig() Config {
 	return Config{
 		Lanes:          4,
 		TickRate:       30,
-		StartSpeed:     40,
-		MaxSpeed:       90,
+		StartSpeed:     50,
+		RampSpeed:      100,
 		RampSeconds:    90,
 		CarLength:      4,
 		ObstacleLength: 1, // a thin barrier: once it is past the car's rear it can no longer be hit
@@ -100,8 +101,10 @@ func (c Config) validate() error {
 		return fmt.Errorf("game: need at least 2 lanes, got %d", c.Lanes)
 	case c.TrafficSpeed >= c.StartSpeed:
 		return fmt.Errorf("game: traffic speed %v must be below start speed %v", c.TrafficSpeed, c.StartSpeed)
-	case c.MaxSpeed < c.StartSpeed:
-		return fmt.Errorf("game: max speed %v is below start speed %v", c.MaxSpeed, c.StartSpeed)
+	case c.RampSpeed < c.StartSpeed:
+		return fmt.Errorf("game: ramp speed %v is below start speed %v", c.RampSpeed, c.StartSpeed)
+	case c.RampSeconds*float64(c.TickRate) < 1:
+		return fmt.Errorf("game: a ramp of %v seconds is shorter than one tick", c.RampSeconds)
 	case c.MinGapTicks < c.Lanes-1:
 		return fmt.Errorf("game: a gap of %d ticks is too short to cross %d lanes", c.MinGapTicks, c.Lanes)
 	}
@@ -169,27 +172,15 @@ func (g *Game) rampTicks() int { return int(g.cfg.RampSeconds * float64(g.cfg.Ti
 
 // speedAt is the car's speed during the given tick.
 func (g *Game) speedAt(tick int) float64 {
-	r := g.rampTicks()
-	if tick >= r {
-		return g.cfg.MaxSpeed
-	}
-	return g.cfg.StartSpeed + (g.cfg.MaxSpeed-g.cfg.StartSpeed)*float64(tick)/float64(r)
+	return g.cfg.StartSpeed + (g.cfg.RampSpeed-g.cfg.StartSpeed)*float64(tick)/float64(g.rampTicks())
 }
 
 // distAt is the car's rear position after the given number of ticks: the
 // sum of speedAt(1..tick) / TickRate, in closed form.
 func (g *Game) distAt(tick int) float64 {
-	rate := float64(g.cfg.TickRate)
-	r := g.rampTicks()
-	n := float64(min(tick, r))
-	d := g.cfg.StartSpeed * n
-	if r > 0 {
-		d += (g.cfg.MaxSpeed - g.cfg.StartSpeed) / float64(r) * n * (n + 1) / 2
-	}
-	if tick > r {
-		d += g.cfg.MaxSpeed * float64(tick-r)
-	}
-	return d / rate
+	n := float64(tick)
+	d := g.cfg.StartSpeed*n + (g.cfg.RampSpeed-g.cfg.StartSpeed)/float64(g.rampTicks())*n*(n+1)/2
+	return d / float64(g.cfg.TickRate)
 }
 
 // zAt is the world position of an obstacle's rear edge at the given tick.

@@ -45,27 +45,27 @@ func TestSameSeedSameRun(t *testing.T) {
 	}
 }
 
-func TestSpeedRamp(t *testing.T) {
+func TestSpeedKeepsRisingWithoutALimit(t *testing.T) {
 	cfg := DefaultConfig()
 	g := New(cfg, 1)
-	ramp := g.rampTicks()
 	if got := g.speedAt(0); got != cfg.StartSpeed {
 		t.Fatalf("speed at start = %v, want %v", got, cfg.StartSpeed)
 	}
-	if got := g.speedAt(ramp); got != cfg.MaxSpeed {
-		t.Fatalf("speed at end of ramp = %v, want %v", got, cfg.MaxSpeed)
+	if got := g.speedAt(g.rampTicks()); got != cfg.RampSpeed {
+		t.Fatalf("speed after %v seconds = %v, want %v", cfg.RampSeconds, got, cfg.RampSpeed)
 	}
-	if got := g.speedAt(ramp * 3); got != cfg.MaxSpeed {
-		t.Fatalf("speed long after the ramp = %v, want %v", got, cfg.MaxSpeed)
+	// It used to stop at 90.
+	if got := g.speedAt(600 * cfg.TickRate); got < 370 {
+		t.Fatalf("speed after 10 minutes = %v, want it to have kept rising", got)
 	}
-	// distAt must equal the tick-by-tick sum, through and past the ramp.
+	// distAt must equal the tick-by-tick sum.
 	sum := 0.0
-	for tick := 1; tick <= ramp+500; tick++ {
-		if g.speedAt(tick) < g.speedAt(tick-1) {
-			t.Fatalf("speed dropped at tick %d", tick)
+	for tick := 1; tick <= 20000; tick++ {
+		if g.speedAt(tick) <= g.speedAt(tick-1) {
+			t.Fatalf("speed did not rise at tick %d", tick)
 		}
 		sum += g.speedAt(tick) / float64(cfg.TickRate)
-		if got := g.distAt(tick); math.Abs(got-sum) > 1e-6 {
+		if got := g.distAt(tick); math.Abs(got-sum) > 1e-6*sum {
 			t.Fatalf("distAt(%d) = %v, want %v", tick, got, sum)
 		}
 	}
@@ -126,11 +126,11 @@ func TestRowsLeaveAGapAndTimeToReachIt(t *testing.T) {
 }
 
 // The spawner's promise: a player who only sees the public observation
-// can always get through, from the slow start to well past top speed.
+// can always get through, from the slow start to speed 167 after 210 seconds.
 // Along the way, no moving car may drive through a barrier.
 func TestSolverSurvivesEverySeed(t *testing.T) {
 	cfg := DefaultConfig()
-	ticks := (int(cfg.RampSeconds) + 120) * cfg.TickRate
+	ticks := 210 * cfg.TickRate
 	for seed := range uint64(200) {
 		g := New(cfg, seed)
 		for range ticks {
