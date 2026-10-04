@@ -30,6 +30,15 @@ Plan: `task_plan_tev.md`. Detailed figures are in its Notes; this file is the ru
 - A sentence the model has not seen costs `tev1:4b` about 420 ms, which is 12 to 14 ticks at pace 1.0. New sentences appear exactly when the situation changes, so the slow answers come at the worst moment
 - Without a guard, a move that has not landed yet is asked about again and sent twice. The bot waits for the lane to change (or 4 ticks) after sending, as the sample bot does
 
+### Phase 3 (comparison harness, 2026-10-04)
+- `tev1:0.8b` never answers `left`: 0 of 29 across 13 wordings, key orders and sentence orders. Mentioning `right` first makes it stop answering `right` too. It is a position habit of the small model, not a wording problem
+- Ollama's fast path differs by model. `tev1:0.8b` answers any of the 140 sentences fast once it has seen it. `tev1:4b` is fast only when the prompt equals the previous one; warm-up over all sentences bought nothing and cost 68 s
+- So for `tev1:4b` every change of situation costs 420 to 500 ms, 13 to 15 ticks at pace 1.0, and that answer is dropped as stale. It then asks again and gets the answer in 52 ms. A change is acted on about 16 ticks late
+- Gemma at pace 1.0: 248 ms per answer is 7 to 9 ticks, so with `-max-stale 6` every answer is dropped. It never steered
+- `blocked later` with the longer instruction did not help: 0.8b stopped moving at all, 4b moved out of a `blocked later` lane into a `blocked soon, clear lane beyond` one and crashed there
+- The schema keeps Gemma to a move: no unusable reply in 140 warm-up questions and 41 decisions
+- Runner memory is the sum over all `llama-server` processes, so a model that is still unloading inflates it. Unload and wait before measuring
+
 ## Technical Decisions
 | Decision | Rationale |
 |----------|-----------|
@@ -37,7 +46,10 @@ Plan: `task_plan_tev.md`. Detailed figures are in its Notes; this file is the ru
 | `instructions` and `criteria` are constant; only `state` changes | Keeps repeat prompts on the fast path |
 | After a move is sent, no new question until the lane changes or 4 ticks pass | Same rule as `cmd/bot`; stops one answer becoming two lane changes |
 | `none` is not sent to the server | Nothing to do; keeps the input queue empty |
-| Lane words: `clear`, `blocked soon`, `blocked now`, `wall`, `blocked soon, clear lane beyond` | Thresholds live in the bot: 60-tick horizon, "now" is 2 ticks or less |
+| Caller chosen from the `decision` capability reported by `/api/show` | No guessing from the name |
+| Unusable Gemma reply is counted, not fatal | The reply text is the model's own |
+| Log prints a decision only when lane, answer, sentence or outcome differ from the last line; `-v` prints all | 213 KB of log for 45 s was unreadable |
+| Lane words: `clear`, `blocked soon`, `blocked now`, `wall`, `blocked later`, `blocked soon, clear lane beyond` | Thresholds live in the bot: 60-tick horizon, "later" is beyond 20 ticks, "now" is 2 ticks or less |
 
 ## Issues Encountered
 | Issue | Resolution |

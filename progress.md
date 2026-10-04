@@ -18,7 +18,7 @@ Plan: `task_plan_tev.md`. Branch: `tev-vs-gemma`.
   - No code changed
 
 ### Phase 2: Tracer bullet, one model driving end to end
-- **Status:** built and run, waiting for the user's sign-off
+- **Status:** complete, signed off by the user after watching both Tev models
 - **Started:** 2026-10-04
 - Actions taken:
   - Wrote `cmd/llmbot`: WebSocket client with the manners of `cmd/bot`, digest builder, Tev caller, per-decision log line
@@ -27,6 +27,18 @@ Plan: `task_plan_tev.md`. Branch: `tev-vs-gemma`.
 - Files created/modified:
   - `cmd/llmbot/main.go`, `cmd/llmbot/digest.go`, `cmd/llmbot/tev.go`, `cmd/llmbot/llmbot_test.go`
   - `.gitignore`, `AGENTS.md` (path table), `task_plan_tev.md`, `findings.md`, `progress.md`
+
+### Phase 3: The comparison harness
+- **Status:** built and run, waiting for the user's approval
+- **Started:** 2026-10-04
+- Actions taken:
+  - Probed 13 variants on 140 sentences for `tev1:0.8b` and `left`; none worked
+  - The user declined the same probe for `tev1:4b` and Gemma and chose to build Phase 3 with `blocked later` untested
+  - Added the Gemma caller, the common `decider`, raw and digested prompt builders, `-state`, `-max-stale`, `-min-confidence`, `-api`, `-warm`, `-v`, the change-only log and the run summary with runner memory
+  - Ran each model once on seed 7, digested, pace 1.0
+- Files created/modified:
+  - `cmd/llmbot/main.go`, `cmd/llmbot/prompt.go` (was `digest.go`), `cmd/llmbot/model.go` (was `tev.go`), `cmd/llmbot/stats.go`, `cmd/llmbot/llmbot_test.go`
+  - `task_plan_tev.md`, `findings.md`, `progress.md`
 
 ## Test Results
 | Test | Input | Expected | Actual | Status |
@@ -37,6 +49,9 @@ Plan: `task_plan_tev.md`. Branch: `tev-vs-gemma`.
 | `go test ./...`, `go vet ./...`, `gofmt -l .` | after Phase 2 | pass, no output | pass, no output | pass |
 | `tev1:0.8b` drives seed 7 | 3 runs, pace 1.0 | drives | crashed at tick 432 each time | works end to end; judgment fails |
 | `tev1:4b` drives seed 7 | 1 run, pace 1.0 | drives | 1,956 ticks, score 3,789 | works; digest and latency limits seen |
+| `go test ./...`, `go vet ./...`, `gofmt -l .` | after Phase 3 | pass, no output | pass, no output | pass |
+| Three models drive seed 7, digested | 1 run each, pace 1.0 | summary printed | 0.8b 311 ticks, 4b 386 ticks, Gemma 311 ticks and 100% stale | harness works; nobody survives |
+| `-state raw`, `-min-confidence` | live | drive | not run live; covered by unit tests only | open for Phase 6 |
 | Raw probe, all three | 7 states | survivable move | `none` every time, 4 of 7 | fails, as expected |
 
 ## Error Log
@@ -49,8 +64,8 @@ Plan: `task_plan_tev.md`. Branch: `tev-vs-gemma`.
 ## 5-Question Reboot Check
 | Question | Answer |
 |----------|--------|
-| Where am I? | Phase 2 built, waiting for sign-off on the run, the log format and the digest shape |
-| Where am I going? | Phase 3 harness, 4 pace, 5 status text, 6 quick look |
+| Where am I? | Phase 3 built, waiting for approval and a decision on the wording |
+| Where am I going? | 4 pace, 5 status text, 6 quick look |
 | What's the goal? | `cmd/llmbot` lets Tev and Gemma drive so speed, RAM and harness can be compared |
 | What have I learned? | See findings.md |
 | What have I done? | See above |

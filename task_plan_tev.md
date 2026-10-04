@@ -13,7 +13,7 @@ A new bot, `cmd/llmbot`, lets the local Ollama models `tev1:0.8b`, `tev1:4b` and
 This is a hands-on quick look, not a benchmark.
 
 ## Current Phase
-Phase 2
+Phase 3 (waiting for approval)
 
 ## Phases
 
@@ -35,19 +35,19 @@ The thinnest slice through every layer: game API, prompt builder, Ollama call, i
 - [x] One call at a time on the newest state; send the chosen action; one warm-up call before driving
 - [x] Terminal line per decision: tick, action, confidence, latency
 - [x] Run `tev1:0.8b` on one seed at normal speed with the viewer open
-- [ ] **STOP: show the run to the user and get sign-off before Phase 3.** Confirm the log format and that the digested state is the right shape
-- **Status:** built and run; waiting for the user's sign-off
+- [x] **STOP: show the run to the user and get sign-off before Phase 3.** Confirm the log format and that the digested state is the right shape
+- **Status:** complete (signed off 2026-10-04 after the user watched both Tev models)
 
 ### Phase 3: The comparison harness
 Everything the bot needs so the three models can be put side by side.
-- [ ] Gemma caller: `/api/chat`, `think: false`, `temperature: 0`, `format` schema with `move` as an enum; parse the JSON, define what happens on an unparseable reply
-- [ ] Common shape for both callers: decide(state) gives action, confidence (absent for Gemma), latency
-- [ ] Raw prompt builder and the `-state raw|digested` flag; cap the obstacle count (Key Question 4)
-- [ ] Stale answers: drop when older than `-max-stale` ticks, count them
-- [ ] `-min-confidence` gate, off by default
-- [ ] End-of-run summary: ticks survived, rows passed, score, decisions per second, median and p95 latency, share dropped as stale, runner process RSS
-- [ ] Tests without real time or a live Ollama: prompt builders, reply parsing, stale and gate logic against an `httptest` stand-in
-- **Status:** pending
+- [x] Gemma caller: `/api/chat`, `think: false`, `temperature: 0`, `format` schema with `move` as an enum; parse the JSON, define what happens on an unparseable reply
+- [x] Common shape for both callers: decide(state) gives action, confidence (absent for Gemma), latency
+- [x] Raw prompt builder and the `-state raw|digested` flag; cap the obstacle count (Key Question 4)
+- [x] Stale answers: drop when older than `-max-stale` ticks, count them
+- [x] `-min-confidence` gate, off by default
+- [x] End-of-run summary: ticks survived, rows passed, score, decisions per second, median and p95 latency, share dropped as stale, runner process RSS
+- [x] Tests without real time or a live Ollama: prompt builders, reply parsing, stale and gate logic against an `httptest` stand-in
+- **Status:** built and run; waiting for the user's approval
 
 ### Phase 4: Clock pace in the server
 A small server change plus one new state field. The game core is not touched.
@@ -85,8 +85,8 @@ Proposed answers in brackets. Numbers 1 and 2 block Phase 2; the rest can be set
 
 1. Settled in Phase 1: yes, with the word form. On 120 probe states `tev1:4b` chose a survivable move 120 times and moved in 45 of the 46 where its lane was not clear; `tev1:0.8b` 118 and 32 of 46. Whether 0.8b moves early enough to drive is for the Phase 2 run to show
 2. Settled in Phase 1: coarse words, relative to the car, as one sentence. See "Digested state" under Notes
-3. Stale threshold? It is counted in ticks, so it adapts to the pace: Gemma's 230 ms is about 7 ticks at pace 1.0 and about 2 at 0.25. [Default 6 ticks, set by `-max-stale`]
-4. How many obstacles in the raw state? Tev's `num_ctx` is 2050; a state with 2 obstacles used 204 input tokens. [Nearest 8]
+3. Settled: default 6 ticks, `-max-stale`, -1 keeps everything. Background: it is counted in ticks, so it adapts to the pace: Gemma's 230 ms is about 7 ticks at pace 1.0 and about 2 at 0.25. [Default 6 ticks, set by `-max-stale`]
+4. Settled: the nearest 8. Background: how many obstacles in the raw state? Tev's `num_ctx` is 2050; a state with 2 obstacles used 204 input tokens. [Nearest 8]
 5. Which paces are allowed? [Any value above 0 up to 1.0]
 6. Settled: the state JSON reports `pace`, because the HUD and the viewer's smoothing need it
 7. Which seed and how long is a run? [Seed 7, which the sample bot is known to survive; stop by hand after about 3 minutes]
@@ -115,6 +115,12 @@ Proposed answers in brackets. Numbers 1 and 2 block Phase 2; the rest can be set
 | One warm-up call before each run; models run one at a time | Load takes 3 to 6 s and must not count as decision latency |
 | Digested state is one sentence of coarse words per move (left, current, right), not numbers and not absolute lanes | Phase 1 probe: numbers scored no better than the raw state, and absolute lane numbers make the model work out which lane a move leads to |
 | `instructions` and `criteria` are the same on every call; only `state` changes | Ollama answers a prompt it has seen before in about 20 ms (0.8b) or 55 ms (4b). Putting the lane words into `criteria` scored the same but lost that |
+| Sign-off on Phase 2 (user, 2026-10-04): add `blocked later`, log only changes, ask every sentence once in warm-up, one more probe of 0.8b's `left` | Chosen after watching both Tev models crash on seed 7 |
+| The user declined the 140-sentence probe of `tev1:4b` and Gemma; `blocked later` and the longer instruction went in untested on those two | User's choice: let the driving runs show it |
+| The caller is picked by asking Ollama (`/api/show`) whether the model has the `decision` capability; `-api` overrides | No guessing from the model name |
+| A Gemma reply without a usable move is counted as unusable and the bot carries on; a failed HTTP call stops it | The text is the model's own and may be anything; a dead Ollama is not worth driving on |
+| A stale `none` counts as stale too | The stale share is meant to show that a model is too slow, whatever it answered |
+| Rows passed are counted from the state stream: a row is new when an obstacle the car is level with has a higher id than any before; the crash row is not passed | Needs nothing from the server |
 | This plan lives in `task_plan_tev.md`; `task_plan.md` is left as the game's plan | The existing plan is the project's memory and must not be overwritten |
 
 ## Errors Encountered
@@ -130,6 +136,9 @@ Proposed answers in brackets. Numbers 1 and 2 block Phase 2; the rest can be set
 | Latency taken from repeat calls with the same prompt (21 ms and 52 ms) | 1 | Those were cache hits. A prompt not seen before costs about 90 ms (0.8b) and 420 ms (4b) digested, 127 ms and 627 ms raw. Measure on changing states |
 | `tev1:0.8b` driving seed 7 on the digested state at pace 1.0 | 3 runs | Crashed at tick 432 (score 633) every time. Not speed (median 21 ms): it sat in a lane that was `blocked soon` for 55 ticks with the way out on its left and answered `none` at confidence 0.14. A follow-up probe showed it almost never answers `left`, also for `left clear, current blocked soon, right wall`, while the mirror cases get `right`. Open: see Notes |
 | `tev1:4b` driving seed 7 on the digested state at pace 1.0 | 1 run | Drove 1,956 ticks (score 3,789, speed 76), then crashed. Two causes: at that speed three rows fit inside the 60-tick horizon, so every lane read `blocked soon` and the words no longer said which was nearest; and each new sentence cost about 420 ms, so those answers were 12 to 14 ticks old. Open: see Notes |
+| Other option keys, key order, sentence order and question forms to get `tev1:0.8b` to answer `left` | 13 variants on 140 sentences | `left` 0 of 29 in every one; with `right` mentioned first it stopped answering `right` as well. Recorded as a finding about the small model, not pursued |
+| Asking all 140 sentences in warm-up so none is new while driving | 1 run per model | Works for `tev1:0.8b` (changes answered in 23 to 41 ms). Does not work for `tev1:4b`: a sentence that differs from the previous call still costs 420 to 500 ms although it was asked in warm-up, and warm-up takes 68 s. Gemma 57 s, no gain seen. Only the immediately repeated prompt is fast on 4b |
+| `blocked later` plus the longer instruction, seed 7, pace 1.0 | 1 run per model | No better. `tev1:0.8b` crashed at tick 311 with no move sent at all (before: tick 432, one move). `tev1:4b` crashed at tick 386: it left a `blocked later` lane for a `blocked soon, clear lane beyond` one, and the answer to the next, new sentence was too old. Gemma crashed at tick 311 with every answer stale (7 to 9 ticks) |
 | Planned slow-down by scaling the car's speeds (`-speed-scale`) | 1 | Dropped before any code: it makes a different game per scale, scores stop being comparable, the stale threshold breaks and the fairness tests must be rerun. Replaced by `-pace` |
 
 ## Notes
@@ -147,4 +156,6 @@ Proposed answers in brackets. Numbers 1 and 2 block Phase 2; the rest can be set
 - The probe is a single-tick check. A model that stays in a blocked lane is still "safe" until the last few ticks, so only driving (Phase 2) shows whether it moves in time
 - **Phase 2 run (2026-10-04).** `go run ./cmd/llmbot -model tev1:0.8b -seed 7`. The slice works end to end: warm-up, claim, one question at a time, moves sent, a log line per decision, release on Ctrl-C or after `-runs`. Latency while driving: 0.8b median 21 ms, p95 40 ms; 4b median 51 ms, p95 409 ms (new sentences). After a move is sent the bot asks nothing until the lane changes or 4 ticks pass, as `cmd/bot` does, so one answer cannot move two lanes
 - **Open after Phase 2, for the user's sign-off.** (a) The words do not rank distance: `blocked soon` covers 3 to 59 ticks. Proposal: split it into `blocked soon` and `blocked later` (for example beyond 20 ticks), or shorten the horizon. (b) `tev1:0.8b` avoids `left`. Not yet tried: other option keys or order. It may simply be a finding about the small model
+- **Phase 3 runs (2026-10-04, seed 7, pace 1.0, digested).** `tev1:0.8b`: 311 ticks, 3 rows, 29.6 decisions per second, median 21 ms, p95 34 ms, 0 stale. `tev1:4b`: 386 ticks, 4 rows, 14.0 per second, median 52 ms, p95 78 ms, 4% stale. `gemma4:e2b`: 311 ticks, 3 rows, 4.0 per second, median 248 ms, 100% stale. Runner memory printed: 5,746, 8,294 and 5,569 MB; the first is suspect, since another model was probably still unloading. The summary adds up all runner processes
+- **Open after Phase 3.** The wording is now worse for 0.8b than in Phase 2 and no better for 4b. Options: go back to the Phase 2 wording, or keep `blocked later` and drop the `towards a clear lane beyond` clause when the current lane is only `blocked later`. Gemma needs the pace of Phase 4 before anything can be said about its judgment
 - Start the game with `go run ./cmd/outrun`, viewer at http://127.0.0.1:8765; Ollama at `localhost:11434`
