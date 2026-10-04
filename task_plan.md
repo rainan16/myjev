@@ -167,4 +167,5 @@ Proposed defaults are in brackets. Confirm or change them in Phase 1.
 - State after Phase 4: full game rules and the full API are in place and documented in `docs/API.md`. Server tests call `tick()` by hand, so they do not depend on real time
 - 2026-10-03: user asked for better, more realistic graphics, so the wireframe look is dropped. `web/viewer.js` now draws a filled OutRun-style scene (sky, mountains, striped grass and road, visual-only curves, palms, barrier and car sprites, smoothing between ticks). Most of Phase 5 is done early; what remains there is the HUD for bot control and tuning the look of moving cars
 - Done in Phase 3: anything alongside the car is marked in grid row 0. A traffic car being overtaken stays drawn at the bottom edge of the screen until it can no longer be hit
+- 2026-10-04: a follow-on task (local models Tev and Gemma driving the game, with a `-pace` flag and a driver status text) has its own plan in `task_plan_tev.md`, decisions in `intent_decisions_answers_tev.md`
 - Run with `go run ./cmd/outrun` and open http://127.0.0.1:8765. The viewer is embedded at build time, so restart after editing `web/`
