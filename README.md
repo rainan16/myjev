@@ -174,6 +174,24 @@ All four models once more with every change above in, seed 7, pace 1.0, one ques
 - **`tev1:0.8b` is unchanged**: 338 answers, none late, one move.
 - **`tev1:4b` with the check on the slowest answer again** also crashed at 357 in 3 of 3 runs, with the first move held where the median lets it through and holds the second. So the 1,594 above was the exception, and the change to the median is not what cost it.
 
+#### Five more seeds
+
+Everything above is seed 7. The same harness on seeds 1 to 5 at pace 1.0, one run per cell, ticks survived, each run stopped after 100 seconds (3,000 ticks):
+
+| Seed | Jev, `-questions 3` | Jev, one question | `tev1:4b` | `gemma4:e2b` | `tev1:0.8b` |
+|------|------|------|------|------|------|
+| 1 | 1,536 | 1,841 | 1,578 | 347 | 257 |
+| 2 | 1,360 | 1,360 | 1,863 | 291 | 341 |
+| 3 | 1,915 | 1,915 | 2,992, still driving | 265 | 153 |
+| 4 | 2,573 | 2,573 | 2,710 | 215 | 154 |
+| 5 | 1,956 | 830 | 2,992, still driving | 404 | 180 |
+| Median | 1,915 | 1,841 | 2,710 | 291 | 180 |
+
+- **`tev1:4b` is ahead of Jev on four of the five seeds** and passed 2,700 ticks on three. Seed 7, where it crashes at 357, is its bad seed, not the rule.
+- **Three open questions did not help Jev here as they did on seed 7.** Same crash tick on three seeds, better on one, worse on one. On seed 11 Jev with three questions crashed at tick 1,452 in four runs of four.
+- **Jev was slower than in the seed 7 runs**: median 302 to 336 ms against 262, so its answers were about two ticks older.
+- **Gemma and `tev1:0.8b` stay under 410 ticks on every seed.**
+
 #### One question per lane: tried, and taken out
 
 The TypeSafe docs suggest asking many narrow questions in one call. That was tried as a third state form: the raw distances and speeds grouped by lane, one yes/no question per lane (`Is lanes.lane_2 free of obstacles the car will reach soon?`), and the rule in Go instead of in the instruction: stay on a lane the model calls clear, otherwise head for the nearest lane it calls clear. The harness calculates nothing for the prompt.

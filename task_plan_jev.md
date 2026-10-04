@@ -116,6 +116,20 @@ Proposed answers in brackets.
 - **Median in the recheck (same day, Jev, seed 7, pace 1.0, one run each).** `-questions 2`: crashed at 2,570 (63 rows, score 6,322, speed 98; 522 decisions, median 299 ms, 33 moves, 1 held, 197,678 input tokens) against 1,735. The crash: asked at 2,540, `right` towards a clear lane beyond, 6 ticks old, held as the lane got worse. `-questions 3`: 2,999 (78 rows, 44 moves, 0 held, median 289 ms, 346,213 tokens), the same tick and the same last moves as before the change. A first `-questions 3` run crashed at 1,355: three calls asked at ticks 1,254 to 1,260 got no reply within 2 s, so no question was open for about 60 ticks; not counted. `-questions 1`: 1,735 again (16 moves, median 321 ms, p95 437 ms); asked at 1,706 the sentence read `blocked soon`, as an answer at 1,671 had been 15 ticks old and the sentence allows for the oldest
 - **All local models again with every change in (same day, seed 7, pace 1.0, `-questions 1`, the other models stopped with `ollama stop`).** `gemma4:e2b`: 318 ticks, 4 rows, 38 answers, 2 moves, all late (11 ticks old), median 257 ms; it had made no move before. Last move `left` on `left: blocked now, current: blocked soon, right: wall`. `tev1:0.8b`: 357, 338 answers, 1 move, median 21 ms, as before. `tev1:4b`: 357 in 4 of 4 runs, 2 moves, 1 held: `left` towards a clear lane beyond asked at 325 and sent, the next `left` asked at 339 or 340 held 13 ticks later
 - **The 1,594 of `tev1:4b` did not repeat.** A binary with the recheck on the slowest answer again, 3 runs: 357 each, 1 move, the `left` asked at 324 or 325 held. So 1 run in 4 with that code got through, and 0 in 4 with the median. In the run that got through, the answers at ticks 311 to 352 were 13 ticks old where the others had one of 14: the 450 ms of a new sentence is 13.5 ticks. The numbers are too few to say the median is worse for Tev
+- **Seeds 1 to 5 (same day, pace 1.0, one run per cell, stopped after 100 s; Jev on one server, the local models one at a time on another, both at once).** Ticks survived:
+
+| Seed | Jev, `-questions 3` | Jev, one question | `tev1:4b` | `gemma4:e2b` | `tev1:0.8b` |
+|------|------|------|------|------|------|
+| 1 | 1,536 | 1,841 | 1,578 | 347 | 257 |
+| 2 | 1,360 | 1,360 | 1,863 | 291 | 341 |
+| 3 | 1,915 | 1,915 | 2,992, still driving | 265 | 153 |
+| 4 | 2,573 | 2,573 | 2,710 | 215 | 154 |
+| 5 | 1,956 | 830 | 2,992, still driving | 404 | 180 |
+| Median | 1,915 | 1,841 | 2,710 | 291 | 180 |
+
+  Moves sent, seeds 1 to 5: Jev with 3 questions 15, 20, 36, 42, 30; with one 22, 18, 34, 36, 8; `tev1:4b` 16, 35, 46, 49, 51; Gemma 1, 2, 6, 1, 6; `tev1:0.8b` 1, 1, 0, 0, 0. Jev median latency 302 to 336 ms; 1 call without a reply with 3 questions on seed 5, 2 with one question on seed 3. Jev input tokens: 1,014,598 with 3 questions, 326,243 with one, about $0.056 together. `tev1:4b` held no move on any of the five seeds
+- **Seed 11, Jev, `-questions 3`, pace 1.0:** crashed at tick 1,452 (30 rows) in 4 runs of 4
+- Not looked at: why Jev crashes where it does on these seeds, and whether the same rows stop `tev1:4b`
 - Not tried: `-questions 4` for Jev; the median in the sentence as well, which is what the one-question run now fails on; a shorter timeout than 2 s for the hosted call, so a stalled call frees its slot sooner; more than one run per setting; pace 0.5 with several questions; a confidence floor (`-min-confidence`) against moves like the one at 2,972
 - Ollama reports `usage` for local Tev as well, so the summary's token line shows for those runs too
 - The TypeSafe agent skill is installed in Claude Code (`/typesafe:typesafe-ai`); use it when writing the questions
