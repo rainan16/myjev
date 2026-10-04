@@ -51,7 +51,7 @@ How to play is in `README.md`. Read `task_plan.md` before a larger change, and r
 - Go: `gofmt` formatting, standard library first. `github.com/coder/websocket` is the only dependency; ask before adding another.
 - Viewer: plain JavaScript on a canvas, no build step, no libraries.
 - The viewer keeps a sprite on screen for as long as the core can still hit it. Hiding it earlier makes crashes look unfair.
-- Difficulty settings live in `DefaultConfig` in `internal/game/game.go`. Row spacing is derived from max speed and tick rate, so change them together.
+- Difficulty settings live in `DefaultConfig` in `internal/game/game.go`. Speed has no upper limit. Rows are kept apart in ticks (`MinGapTicks`) as well as in road distance, which is what keeps a fast run survivable, so change speed, spacing and tick rate together.
 - Do not retune the difficulty defaults unprompted. That is waiting on feedback from a human playing.
 - When endpoints, message types or the state JSON change, update `docs/API.md` and `README.md` in the same change. The viewer, the sample bot and outside bots all depend on that shape.
 

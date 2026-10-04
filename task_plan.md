@@ -10,7 +10,7 @@
 A single local Go binary runs a raw, wireframe OutRun-style game (4 lanes, K = left, L = right, dodge cars and obstacles) whose headless core exposes a WebSocket + HTTP API on 127.0.0.1, so a human in the embedded web viewer or an external program can play it and watch it in real time, with a sample Go bot included.
 
 ## Current Phase
-Phase 7 (Phases 1 to 6 complete; Phase 5 was finished early when the user asked for better graphics)
+Complete (2026-10-04). All seven phases are done
 
 ## Target layout
 
@@ -80,12 +80,12 @@ The smallest thing that proves the architecture: core, API, viewer and an extern
 - **Status:** complete
 
 ### Phase 7: Tuning and delivery
-- [ ] Tune tick rate, speed ramp and spawn spacing by playing as a human (waiting for the user's feedback after playing)
+- [x] Tune tick rate, speed ramp and spawn spacing (2026-10-04: the user removed the speed cap and raised the start speed to 50; tick rate, row spacing, tight rows and the share of cars were left as they are)
 - [x] `go vet`, `go test ./...`, check the binary runs with no files beside it
 - [x] README: how to run, keys, API quick start with curl and a WebSocket example, how to run the bot
-- [ ] Final walkthrough with the user
+- [x] Final walkthrough with the user (2026-10-04)
 - [x] Initial commit (`c7a2b23`, made by the user)
-- **Status:** in_progress (README and checks done; tuning and walkthrough need the user)
+- **Status:** complete. Known loose ends, not asked for: `cmd/bot` can still hit the start-up race that was fixed in `cmd/llmbot`, and its `-runs` flag counts crashes, which do not happen
 
 ## Key Questions
 Proposed defaults are in brackets. Confirm or change them in Phase 1.
@@ -134,6 +134,8 @@ Proposed defaults are in brackets. Confirm or change them in Phase 1.
 | A moving car is only placed if it would not be seen driving through a barrier in its lane; otherwise that slot becomes a barrier | Resolves the "cars catch up with obstacles" risk. The same test checks that no two obstacles ever overlap |
 | All traffic drives at one speed (20), below the start speed (40) | Traffic never interacts with other traffic and is always overtaken |
 | Speed 40 to 90 over 90 s, row spacing 60 to 110 units, 15% of rows leave a single open lane, half of obstacles are cars | First values; to be tuned by hand in Phase 7 |
+| Speed has no upper limit: it reaches 90 after 90 s and keeps rising at the same rate (`MaxSpeed` became `RampSpeed`) (user, 2026-10-04) | User's tuning choice in Phase 7. Layouts are unchanged for the first 2,300 ticks (checked on 60 seeds), so earlier seed 7 results still compare. Fairness holds because rows are at least 12 ticks apart whatever the speed; the solver survived 60 minutes (speed about 2,040) on 40 seeds in a one-off probe, and `TestSolverSurvivesEverySeed` still covers 200 seeds to speed 157 |
+| Start speed 50, not 40; the rate of gain is unchanged, so the speed is 100 after 90 s (`StartSpeed` 50, `RampSpeed` 100) (user, 2026-10-04) | User's tuning choice in Phase 7. Every layout changes, so results measured on seed 7 before this (README table, tick 836) are not comparable with new runs. The two `llmbot` regression tests pin the old config. Fairness tests pass, now to speed 167 |
 | State gained `tick_rate`, `car_length` and per-obstacle `speed` | A bot needs them to predict when an obstacle is reached |
 | `game.Solve` is the reference player: 60-tick lookahead search over the public observation | Used by the fairness test; reuse it for the sample bot in Phase 6 |
 | Control rules: a bot claims only from `human` (or repeats its own claim); `human` can always claim back (viewer key H); release or WebSocket disconnect returns control to `human`; anyone may reset | Keeps "one driver at a time" without locking the human out |

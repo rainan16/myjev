@@ -21,7 +21,7 @@ Then open http://127.0.0.1:8765.
 | **Space** | Restart after a crash |
 | **H** | Take the car back from a bot |
 
-Each key press moves exactly one lane; holding a key does nothing more. The car speeds up on its own, from 40 to 90 over the first 90 seconds. Any hit ends the run, and the score is the distance survived.
+Each key press moves exactly one lane; holding a key does nothing more. The car speeds up on its own: it starts at 50, reaches 100 after 90 seconds and keeps getting faster for as long as you survive. Any hit ends the run, and the score is the distance survived.
 
 To build a binary you can copy anywhere (the viewer is embedded in it):
 
@@ -66,7 +66,7 @@ With the server and Ollama running:
 go run ./cmd/llmbot -model tev1:4b -seed 7
 ```
 
-The game does not wait for the model. One question is open at a time, always about the newest state, and an answer that arrives too late is dropped. The viewer shows the model's name as the driver and, under it, how long the last answer took and how sure the model was. To give a slow model a chance, slow the game's clock instead: `go run ./cmd/outrun -pace 0.25`.
+The game does not wait for the model. One question is open at a time, always about the newest state, and an answer that arrives too late is dropped. A move is checked once more before it is sent: if the lane it leads to reads worse on the newest state than on the one the model was asked about, the move is held and the model is asked again. The viewer shows the model's name as the driver and, under it, how long the last answer took and how sure the model was. To give a slow model a chance, slow the game's clock instead: `go run ./cmd/outrun -pace 0.5`.
 
 | Flag | Default | Meaning |
 |------|---------|---------|
@@ -80,7 +80,7 @@ The game does not wait for the model. One question is open at a time, always abo
 | `-ollama` | `http://127.0.0.1:11434` | Base URL of Ollama |
 | `-addr`, `-name`, `-seed`, `-runs`, `-pause` | | As for the sample bot; the name defaults to the model name |
 
-At the end of each run it prints ticks survived, rows passed, score, decisions per second, latency, how many answers were dropped as stale, and the memory of Ollama's model runner.
+At the end of each run it prints ticks survived, rows passed, score, decisions per second, latency, how many answers were dropped as stale or held because the lane got worse, and the memory of Ollama's model runner.
 
 ### Two ways to ask
 
@@ -122,11 +122,11 @@ What Gemma needed and Tev did not: thinking switched off (out of the box one ans
 
 `-state raw` gives the model the car's lane and speed and the nearest eight obstacles with lane, distance and speed. Working out which lane is blocked when takes arithmetic, and none of the three models did it: on seven probe states all three answered `none` every time.
 
-`-state digested` does the arithmetic in Go and gives the model one sentence about the lane each move leads to, such as `Lane to the left: blocked soon. Current lane: clear. Lane to the right: wall.` The words are `clear`, `blocked soon`, `blocked now`, `wall`, and `blocked soon, clear lane beyond`. Numbers (ticks until blocked) worked no better than the raw state; words did.
+`-state digested` does the arithmetic in Go and gives the model one sentence about the lane each move leads to, such as `Lane to the left: blocked soon. Current lane: clear. Lane to the right: wall.` The words are `clear`, `blocked soon`, `blocked now`, `wall`, and `blocked soon, clear lane beyond`. A lane is `clear` when it stays free for 60 ticks, or when it outlasts the nearest blockage on the road by at least 12 ticks: at speed the next row is always in sight, and the lane to head for is the one that is free the longest. A lane only counts as leading to a clear lane beyond if it stays free long enough for this model to cross it: each further lane change costs as many ticks as the model's slowest usable answer so far, plus one. Numbers (ticks until blocked) worked no better than the raw state; words did.
 
 ### What was seen
 
-One run per cell on seed 7, on an M2 Pro with 32 GB, each model loaded alone. A cell shows the ticks survived; 2,700 ticks is the whole speed ramp and counts as surviving. The first row fills lane 2, where the car starts, at tick 311.
+One run per cell on seed 7, on an M2 Pro with 32 GB, each model loaded alone. A cell shows the ticks survived; 2,700 ticks (90 seconds of game time) counts as surviving. When these runs were made the car started at 40 and the speed stopped rising at 90 there; the start is now 50 and there is no limit, so seed 7 gives a different road today. The first row fills lane 2, where the car starts, at tick 311.
 
 | Model | State | Pace 1.0 | Pace 0.5 | Pace 0.25 | Median latency |
 |-------|-------|----------|----------|-----------|----------------|
@@ -151,7 +151,15 @@ What that shows:
 - **`tev1:4b` judges best but is not uniformly fast.** It answers in about 50 ms when the prompt equals the previous one and in about 410 ms when it differs, and the sentence differs exactly when the situation changes. On the raw state, which changes every tick, it is the slowest of the three. It survived the whole ramp only at pace 0.25.
 - **Confidence is informative.** For `tev1:0.8b` the median confidence was 0.55 on good answers and 0.20 on bad ones. One run of `tev1:4b` at pace 0.25 with `-min-confidence 0.5` held back 10 moves and crashed at tick 1,926, where the ungated run survived. Staying in lane is not a safe fallback in this game, so a gate can turn a doubtful move into a crash by inaction.
 
-How far to trust it: every cell is a single run. The same model, seed and pace gave different results on different runs (`tev1:4b`, digested, pace 1.0: 387, 1,926 and 1,956 ticks), because the outcome depends on which tick an answer happens to land on. That is also why pace 0.5 looks worse than pace 1.0 for `tev1:4b`. Latency and memory are the dependable numbers. The memory figures compare different quantizations, and a runner grows while it works: `tev1:4b` stood at 6.9 GB after a run.
+After those runs the harness and the game were changed (see below), and seed 7 is a different road now. One run each on the new road at pace 0.5:
+
+| Model | Ticks | Rows passed | Median latency | How it ended |
+|-------|-------|-------------|----------------|--------------|
+| `tev1:0.8b` | 357 | 5 | 27 ms | Stayed in a blocked lane with the way out on its left |
+| `gemma4:e2b` | 767 | 14 | 253 ms | Moved into a lane that read `blocked now` |
+| `tev1:4b` | 2,763, stopped | 71 | 55 ms | Still driving at speed 101 |
+
+How far to trust it: every cell is a single run. The first table was made before three changes to the harness: a move whose lane got worse is now held, `clear lane beyond` now allows for the model's answer time, and `clear` is now relative to the nearest blockage. Both `tev1:4b` and `gemma4:e2b` crashed at tick 836 at pace 0.5 on a move those changes prevent, so the cells of the first table say more about the harness than about the models. The car now also starts at 50 and has no speed limit, which moves every row, so the two tables are not the same road. The same model, seed and pace gave different results on different runs (`tev1:4b`, digested, pace 1.0: 387, 1,926 and 1,956 ticks), because the outcome depends on which tick an answer happens to land on. That is also why pace 0.5 looks worse than pace 1.0 for `tev1:4b`. Latency and memory are the dependable numbers. The memory figures compare different quantizations, and a runner grows while it works: `tev1:4b` stood at 6.9 GB after a run.
 
 ## Write your own bot
 

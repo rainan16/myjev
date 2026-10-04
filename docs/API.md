@@ -27,9 +27,9 @@ The server refuses to start on anything but a loopback address, because the API 
   "lanes": 4,
   "lane": 1,
   "car_length": 4,
-  "speed": 47.6,
-  "distance": 601.5,
-  "score": 601,
+  "speed": 57.6,
+  "distance": 739.2,
+  "score": 739,
   "best_score": 1210,
   "obstacles": [
     {"id": 17, "lane": 2, "ahead": 30.7, "length": 1, "speed": 0, "type": "obstacle"},
@@ -54,7 +54,7 @@ The server refuses to start on anything but a loopback address, because the API 
 | `game_over` | `true` after a collision. The state is frozen until a reset |
 | `lane` | The car's lane |
 | `car_length` | Length of the player's car in world units |
-| `speed` | The car's speed in world units per game second. It rises from 40 to 90 over the first 90 game seconds (2,700 ticks), then holds. Steering does not affect it |
+| `speed` | The car's speed in world units per game second. It starts at 50, reaches 100 after 90 game seconds (2,700 ticks) and keeps rising at that rate, without a limit. Steering does not affect it |
 | `distance`, `score` | Distance survived. `score` is `distance` rounded down |
 | `best_score` | Best score since the server started (in memory only) |
 | `obstacles` | Everything within 300 units that is not yet behind the car, nearest first |

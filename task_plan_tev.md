@@ -13,7 +13,7 @@ A new bot, `cmd/llmbot`, lets the local Ollama models `tev1:0.8b`, `tev1:4b` and
 This is a hands-on quick look, not a benchmark.
 
 ## Current Phase
-Phase 6 (walk-through with the user open)
+Phase 6 (walk-through with the user open). A session of fixes to the harness followed the quick look on 2026-10-04; see the last rows of Decisions Made and Errors Encountered, and `findings.md`
 
 ## Phases
 
@@ -77,8 +77,8 @@ An API change: docs and README move in the same change.
 - [x] One pass with `-min-confidence` set, on a Tev model, to see what the gate changes
 - [x] README section: the Tev call and the Gemma call side by side, the knobs Gemma needed, and the observed numbers with their caveats (one seed, RAM figures across different quantizations)
 - [x] Move the decisions and failed approaches that matter to the game into `task_plan.md`
-- [ ] Walk through the result with the user
-- **Status:** runs and write-up done; the walk-through with the user is open
+- [ ] Walk through the result with the user (left open by the user, 2026-10-04)
+- **Status:** runs and write-up done; the walk-through with the user is open. The README table of 19 runs was not re-run on the changed harness and game
 
 ## Key Questions
 Proposed answers in brackets. Numbers 1 and 2 block Phase 2; the rest can be settled in the phase that needs them.
@@ -128,6 +128,9 @@ Proposed answers in brackets. Numbers 1 and 2 block Phase 2; the rest can be set
 | A reset keeps the status; only a change of controller clears it | The driver is the same after a reset |
 | Setting the status does not broadcast; it travels in the next tick's state | A chatty driver cannot flood the viewers |
 | `llmbot` sends its status at most every 15 ticks and only when the text changed | About two a second at pace 1.0 |
+| A move is rechecked on the newest state before it is sent: it is held when the lane it leads to reads worse (`clear`, `clear lane beyond`, `blocked soon`, `blocked now`, `wall`, in that order) than on the state the model was asked about (user, 2026-10-04) | The model judged a state 5 to 6 ticks old. The check is arithmetic in Go and judges the age of the answer, not the model's choice: a move into a lane that was already bad when asked still goes out |
+| `clear lane beyond` allows for the model's answer time: a lane on the way must stay free for more than `moves × (reaction + 1) + 1` ticks, where `reaction` is the oldest answer the bot has acted on so far, in ticks. With reaction 0 it is the old rule (user, 2026-10-04) | The old rule assumed one lane change per tick, which holds for the solver and for no model. The reaction is measured, not set, so it follows the model and the pace; the stale limit caps it |
+| A lane is `clear` when it is free for the whole 60-tick horizon or outlasts the nearest blockage on the road by 12 ticks (`clearFrom`); lanes that are `blocked now` do not count as the nearest (user, 2026-10-04) | With the start speed at 50 and no speed limit, the next row is inside the horizon before the last one is passed, so `clear` stopped appearing and every lane read `blocked soon`. Unlike `blocked later` (a new word with a fixed threshold) this adds no word and compares in Go |
 | This plan lives in `task_plan_tev.md`; `task_plan.md` is left as the game's plan | The existing plan is the project's memory and must not be overwritten |
 
 ## Errors Encountered
@@ -148,6 +151,9 @@ Proposed answers in brackets. Numbers 1 and 2 block Phase 2; the rest can be set
 | `blocked later` plus the longer instruction, seed 7, pace 1.0 | 1 run per model | No better. `tev1:0.8b` crashed at tick 311 with no move sent at all (before: tick 432, one move). `tev1:4b` crashed at tick 386: it left a `blocked later` lane for a `blocked soon, clear lane beyond` one, and the answer to the next, new sentence was too old. Gemma crashed at tick 311 with every answer stale (7 to 9 ticks) |
 | Runner memory read from the bot's run summaries | 19 runs | Not usable: 5.1 to 10.6 GB for `tev1:0.8b` alone. Another model was still unloading in some runs and a runner grows while it works. Measured separately on a freshly loaded runner (1.0, 4.7 and 5.0 GB); the summary now says how many runners it added up |
 | `tev1:4b`, digested, pace 1.0 in the quick look: the bot claimed the car and never played | 1 | A race in how the bot recognised its own run; see `task_plan.md`. Fixed in `cmd/llmbot`, the run was repeated |
+| `tev1:4b` and `gemma4:e2b`, digested, pace 0.5, seed 7: both crashed at tick 836 | 1 run each, plus the quick-look cell for `tev1:4b` | Harness, not model. At tick 824 the car is in lane 1 with 59 ticks left, lane 2 has a barrier 9 ticks away, lane 3 is clear. The digest read `blocked soon` for all three and `clear lane beyond` on the right; both answered `right`, the answer came 5 to 6 ticks later and the car drove into the barrier. Three faults: `blocked soon` covers 3 to 59 ticks; `leadsToClear` assumes one lane per tick (free for more than 3 ticks); the move was sent without a second look. Fixed: the recheck before sending (`TestMoveIsHeldWhenItsLaneGotWorseWhileTheModelAnswered`), which caught Tev's move (6 ticks old) but not Gemma's (5 ticks old, the lane still read `clear lane beyond`); then the latency-aware `clear lane beyond` (`TestClearLaneBeyondAllowsForHowLongTheDriverTakesToAnswer`). `blocked soon` still hides the distance. One run each at pace 0.5: `tev1:4b` with the recheck only was still driving at tick 3,988 when stopped; Gemma with both crashed at tick 1,349 moving into a `blocked now` lane. `tev1:4b` has not been run with both. The README table predates the fixes |
+| `tev1:4b`, digested, pace 0.5, seed 7, start speed 50: crashed at tick 1,708 (speed 82) | 1 run | Harness. From tick 1,674 the left lane had about 28 ticks more room than the car's own (59 against 31, down to 24 against 0), but all three read `blocked soon` and Tev answered `none` at confidence 0.92. `clear` had shown for 7 ticks only; the `left` answer in that window was 7 ticks old and dropped as stale. Fixed by the relative `clear` (`TestLaneThatOutlastsTheNearestBlockageIsClear`). Not changed: the stale limit still drops a move that would pass the recheck |
+| `tev1:4b`, same settings, after the relative `clear`: crashed at tick 1,735 | 1 run | The row left only lane 2 open, came into sight 21 ticks ahead, and the car was in lane 0. Tev answered `right` 6 ticks after being asked; the recheck held it, because on the newest state it still asked for room for two answers (`moves × (reaction + 1) + 1`) although one was already given. Fixed: on the state now the decided move only has to land (`TestMoveTowardsAClearLaneBeyondIsSentWhenTheRestCanStillBeDone`) |
 | Planned slow-down by scaling the car's speeds (`-speed-scale`) | 1 | Dropped before any code: it makes a different game per scale, scores stop being comparable, the stale threshold breaks and the fairness tests must be rerun. Replaced by `-pace` |
 
 ## Notes

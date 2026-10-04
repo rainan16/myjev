@@ -99,12 +99,15 @@ type bot struct {
 	warm          bool
 	verbose       bool
 	form          string // "digested" or "raw", for the status text
-	build         func(game.State) prompt
+	build         func(s game.State, reaction int) prompt
 	model         decider
 
 	conn    *websocket.Conn
 	driving bool // the server has shown us as the controller
 	played  int
+	// reaction is the oldest an answer has been, in ticks, when it was
+	// still young enough to act on: how long the model can take.
+	reaction int
 }
 
 var errTakenOver = errors.New("someone else took the car")
@@ -146,7 +149,7 @@ func (b *bot) play(ctx context.Context, url string) error {
 // before much faster, so every digested state is asked once as well.
 func (b *bot) warmUp(ctx context.Context) error {
 	start := time.Now()
-	prompts := []prompt{b.build(game.State{})}
+	prompts := []prompt{b.build(game.State{}, 0)}
 	if b.warm {
 		prompts = prompts[:0]
 		for _, s := range allSentences() {
@@ -250,9 +253,9 @@ func (b *bot) loop(ctx context.Context) error {
 			waiting = false
 		}
 		asking, askedTick = true, s.Tick
+		p := b.build(s.State, b.reaction)
 		go func() {
-			p := b.build(s.State)
-			a := answer{run: s.RunID, tick: s.Tick, lane: s.Lane, state: p.state}
+			a := answer{run: s.RunID, tick: s.Tick, lane: s.Lane, state: p.state, seen: s.State}
 			a.decision, a.err = b.model.decide(ctx, p)
 			answers <- a
 		}()
@@ -285,7 +288,10 @@ func (b *bot) loop(ctx context.Context) error {
 			if a.run != run || latest.GameOver {
 				continue // the run it was about is over
 			}
-			o := judge(a, latest.Tick, latest.Lane, b.maxStale, b.minConfidence)
+			o := judge(a, latest.State, b.reaction, b.maxStale, b.minConfidence)
+			if o != stale {
+				b.reaction = max(b.reaction, latest.Tick-a.tick)
+			}
 			st.decided(a.decision, o)
 			if o == sent {
 				if err := b.send(ctx, map[string]any{"type": "input", "action": a.action}); err != nil {

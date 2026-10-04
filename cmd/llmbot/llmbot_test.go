@@ -82,7 +82,7 @@ func TestDigestDescribesTheLaneEachMoveLeadsTo(t *testing.T) {
 	}
 	all := allSentences()
 	for _, c := range cases {
-		got := digested(c.state)
+		got := digested(c.state, 0)
 		if got.state != c.want {
 			t.Errorf("%s:\n got  %s\n want %s", c.name, got.state, c.want)
 		}
@@ -112,7 +112,7 @@ func TestWarmUpSentencesAreAllDifferent(t *testing.T) {
 }
 
 func TestRawStateKeepsTheNearestObstaclesOnly(t *testing.T) {
-	got := raw(observation(1, 47.6, barrier(1, 30.7), traffic(0, 88.2)))
+	got := raw(observation(1, 47.6, barrier(1, 30.7), traffic(0, 88.2)), 0)
 	want := `{"lane":1,"speed":47.6,"obstacles":[{"lane":1,"ahead":30.7,"speed":0},{"lane":0,"ahead":88.2,"speed":20}]}`
 	if got.state != want || got.instructions != rawInstructions {
 		t.Errorf("raw = %+v", got)
@@ -123,13 +123,13 @@ func TestRawStateKeepsTheNearestObstaclesOnly(t *testing.T) {
 		many = append(many, barrier(i%4, float64(10*i)))
 	}
 	var r rawState
-	if err := json.Unmarshal([]byte(raw(observation(1, 40, many...)).state), &r); err != nil {
+	if err := json.Unmarshal([]byte(raw(observation(1, 40, many...), 0).state), &r); err != nil {
 		t.Fatal(err)
 	}
 	if len(r.Obstacles) != rawObstacles || r.Obstacles[rawObstacles-1].Ahead != 70 {
 		t.Errorf("obstacles = %+v", r.Obstacles)
 	}
-	if empty := raw(observation(1, 40)).state; !strings.Contains(empty, `"obstacles":[]`) {
+	if empty := raw(observation(1, 40), 0).state; !strings.Contains(empty, `"obstacles":[]`) {
 		t.Errorf("empty road = %s", empty)
 	}
 }
@@ -294,9 +294,151 @@ func TestAnswerIsDroppedWhenStaleGatedOrOvertaken(t *testing.T) {
 		{"the car has moved on", sure, 102, 2, 6, 0, laneChanged},
 	}
 	for _, c := range cases {
-		a := answer{decision: c.d, tick: 100, lane: 1}
-		if got := judge(a, c.nowTick, c.nowLane, c.maxStale, c.minConfidence); got != c.want {
+		a := answer{decision: c.d, tick: 100, lane: 1, seen: observation(1, 50)}
+		now := observation(c.nowLane, 50)
+		now.Tick = c.nowTick
+		if got := judge(a, now, 0, c.maxStale, c.minConfidence); got != c.want {
 			t.Errorf("%s: outcome %d, want %d", c.name, got, c.want)
+		}
+	}
+}
+
+// configOfTheQuickLook is the game the models were watched on. The start
+// speed has been raised since, which moves every row.
+func configOfTheQuickLook() game.Config {
+	cfg := game.DefaultConfig()
+	cfg.StartSpeed, cfg.RampSpeed = 40, 90
+	return cfg
+}
+
+// Seed 7, tick 824, car in lane 1: the lane to the right has a barrier
+// 9 ticks away and a clear lane beyond it. Both tev1:4b and gemma4:e2b
+// answered "right"; the answer came 5 to 6 ticks later, when the barrier
+// was too close to cross, and the car drove into it.
+func TestMoveIsHeldWhenItsLaneGotWorseWhileTheModelAnswered(t *testing.T) {
+	g := game.New(configOfTheQuickLook(), 7)
+	at := map[int]game.State{}
+	for !g.GameOver() && g.Snapshot().Tick <= 831 {
+		s := g.Snapshot()
+		g.Step(game.Solve(s))
+		s.Lane = 1 // where the models had the car
+		at[s.Tick] = s
+	}
+	right := decision{action: "right", hasConfidence: true, confidence: 0.86}
+	left := decision{action: "left", hasConfidence: true, confidence: 0.86}
+	for _, c := range []struct {
+		name       string
+		d          decision
+		asked, now int
+		want       outcome
+	}{
+		{"tev1:4b, answer 6 ticks old", right, 824, 830, worsened},
+		{"gemma4:e2b, answer 5 ticks old", right, 826, 831, worsened},
+		{"an answer that came at once", right, 824, 825, sent},
+		{"the other lane is as it was", left, 824, 830, sent},
+	} {
+		a := answer{decision: c.d, tick: c.asked, lane: 1, seen: at[c.asked]}
+		if got := judge(a, at[c.now], 0, 6, 0); got != c.want {
+			t.Errorf("%s: outcome %d, want %d", c.name, got, c.want)
+		}
+	}
+}
+
+// The same moment on seed 7. The barrier to the right is 9 ticks away:
+// a driver that moves on every tick can cross that lane to the clear one
+// beyond, a model that takes 5 ticks to answer cannot. gemma4:e2b was
+// told "clear lane beyond", moved right and never made the second move.
+func TestClearLaneBeyondAllowsForHowLongTheDriverTakesToAnswer(t *testing.T) {
+	g := game.New(configOfTheQuickLook(), 7)
+	for g.Snapshot().Tick < 824 {
+		g.Step(game.Solve(g.Snapshot()))
+	}
+	s := g.Snapshot()
+	s.Lane = 1
+	for reaction, want := range map[int]string{
+		0: sentence(wordClear, wordClear, wordBeyond),
+		2: sentence(wordClear, wordClear, wordBeyond),
+		3: sentence(wordClear, wordClear, wordSoon),
+		6: sentence(wordClear, wordClear, wordSoon),
+	} {
+		if got := digested(s, reaction).state; got != want {
+			t.Errorf("reaction %d ticks:\n got %s\nwant %s", reaction, got, want)
+		}
+	}
+}
+
+// Seed 7 with the car starting at 50, lane 1, speed 81. The next row is
+// inside the 60-tick horizon before the last one is behind the car, so
+// no lane is free for the whole horizon. For 34 ticks the lane to the
+// left had 28 ticks more room than the car's own, every lane read
+// "blocked soon", and tev1:4b stayed where it was until it crashed.
+func TestLaneThatOutlastsTheNearestBlockageIsClear(t *testing.T) {
+	cfg := game.DefaultConfig()
+	cfg.StartSpeed, cfg.RampSpeed = 50, 100
+	g := game.New(cfg, 7)
+	for g.Snapshot().Tick < 1702 {
+		s := g.Snapshot()
+		g.Step(game.Solve(s))
+		if s.Tick < 1674 {
+			continue
+		}
+		s.Lane = 1 // where the model had the car
+		// The lane to the right leads to the clear lane 3 for a while,
+		// so only the two lanes that decide the move are checked.
+		free := clearTicks(s)
+		if left, current := laneWord(s, free, -1, 6, 0), laneWord(s, free, 0, 6, 0); left != wordClear || current != wordSoon {
+			t.Fatalf("tick %d, free for %v ticks: left %q, current %q; want %q and %q",
+				s.Tick, free, left, current, wordClear, wordSoon)
+		}
+	}
+
+	for _, c := range []struct {
+		name string
+		free []int
+		want int
+	}{
+		{"nothing near: the whole horizon", []int{60, 60, 60, 60}, 60},
+		{"a row ahead: outlast it by the margin", []int{11, 56, 11, 11}, 23},
+		{"a row being passed does not count", []int{0, 41, 41, 0}, 53},
+		{"never more than the horizon", []int{59, 59, 60, 60}, 60},
+	} {
+		if got := clearFrom(c.free); got != c.want {
+			t.Errorf("%s: clear from %d ticks, want %d", c.name, got, c.want)
+		}
+	}
+}
+
+// Seed 7 with the car starting at 50, lane 0. The row ahead leaves only
+// lane 2 open and comes into sight 21 ticks before it is met. tev1:4b
+// answered "right" 6 ticks after it was asked. The check before sending
+// held the move, because it asked for room for two answers when one was
+// already given, and the car stayed in lane 0 until it crashed.
+func TestMoveTowardsAClearLaneBeyondIsSentWhenTheRestCanStillBeDone(t *testing.T) {
+	cfg := game.DefaultConfig()
+	cfg.StartSpeed, cfg.RampSpeed = 50, 100
+	g := game.New(cfg, 7)
+	at := map[int]game.State{}
+	for g.Snapshot().Tick <= 1725 {
+		s := g.Snapshot()
+		g.Step(game.Solve(s))
+		s.Lane = 0 // where the model had the car
+		at[s.Tick] = s
+	}
+	const reaction = 6
+	if got, want := digested(at[1713], reaction).state, sentence(wordWall, wordSoon, wordBeyond); got != want {
+		t.Fatalf("asked:\n got %s\nwant %s", got, want)
+	}
+	right := answer{decision: decision{action: "right"}, tick: 1713, lane: 0, seen: at[1713]}
+	for _, c := range []struct {
+		name string
+		now  int
+		want outcome
+	}{
+		{"the answer as it came, 6 ticks old", 1719, sent},
+		{"too late for the second move", 1725, worsened},
+	} {
+		if got := judge(right, at[c.now], reaction, -1, 0); got != c.want {
+			t.Errorf("%s: outcome %d, want %d (free for %v ticks)", c.name, got, c.want, clearTicks(at[c.now]))
 		}
 	}
 }
@@ -344,6 +486,7 @@ func TestSummaryReportsRateLatencyAndStaleShare(t *testing.T) {
 		"decisions  20, 2.0 per second",
 		"median 110 ms, p95 200 ms",
 		"3 moves sent, 12 stay, 5 stale (25%)",
+		"0 held as the lane got worse",
 		"2 unusable",
 		"2911 MB in Ollama's model runner",
 	} {

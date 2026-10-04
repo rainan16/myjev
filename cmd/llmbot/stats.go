@@ -20,10 +20,11 @@ const (
 	stale                      // too old to act on
 	gated                      // confidence below -min-confidence
 	laneChanged                // the car left the lane the answer was about
+	worsened                   // the lane the move leads to got worse while the model answered
 )
 
 func (o outcome) String() string {
-	return [...]string{"", "", "dropped: stale", "not sent: low confidence", "not sent: the car has changed lane"}[o]
+	return [...]string{"", "", "dropped: stale", "not sent: low confidence", "not sent: the car has changed lane", "not sent: that lane got worse meanwhile"}[o]
 }
 
 // answer is a decision together with the state it was made on.
@@ -34,20 +35,25 @@ type answer struct {
 	tick  int
 	lane  int
 	state string
+	seen  game.State // the observation the question was about
 }
 
 // judge decides what to do with an answer given where the game is now.
-// maxStale below zero keeps every answer however old.
-func judge(a answer, nowTick, nowLane, maxStale int, minConfidence float64) outcome {
+// maxStale below zero keeps every answer however old. A move is checked
+// against the newest state before it is sent: the model judged an older
+// one.
+func judge(a answer, now game.State, reaction, maxStale int, minConfidence float64) outcome {
 	switch {
-	case maxStale >= 0 && nowTick-a.tick > maxStale:
+	case maxStale >= 0 && now.Tick-a.tick > maxStale:
 		return stale
 	case a.action == "none":
 		return stayed
 	case a.hasConfidence && a.confidence < minConfidence:
 		return gated
-	case nowLane != a.lane:
+	case now.Lane != a.lane:
 		return laneChanged
+	case gotWorse(a.seen, now, a.action, reaction):
+		return worsened
 	}
 	return sent
 }
@@ -55,7 +61,7 @@ func judge(a answer, nowTick, nowLane, maxStale int, minConfidence float64) outc
 // stats collects what the summary of one run reports.
 type stats struct {
 	latencies []time.Duration
-	outcomes  [laneChanged + 1]int
+	outcomes  [worsened + 1]int
 	unusable  int // replies that held no move
 
 	rows    int // rows the car has come level with
@@ -119,8 +125,8 @@ func (st *stats) summary(s state, crashed bool, elapsed time.Duration, mem runne
 		s.RunID, end, s.Pace, s.Tick, st.rowsPassed(crashed), s.Score, s.Speed)
 	fmt.Fprintf(&b, "  decisions  %d, %.1f per second\n", n, rate)
 	fmt.Fprintf(&b, "  latency    median %d ms, p95 %d ms\n", st.percentile(50).Milliseconds(), st.percentile(95).Milliseconds())
-	fmt.Fprintf(&b, "  answers    %d moves sent, %d stay, %d stale (%.0f%%), %d below confidence, %d after a lane change, %d unusable\n",
-		st.outcomes[sent], st.outcomes[stayed], st.outcomes[stale], staleShare, st.outcomes[gated], st.outcomes[laneChanged], st.unusable)
+	fmt.Fprintf(&b, "  answers    %d moves sent, %d stay, %d stale (%.0f%%), %d below confidence, %d after a lane change, %d held as the lane got worse, %d unusable\n",
+		st.outcomes[sent], st.outcomes[stayed], st.outcomes[stale], staleShare, st.outcomes[gated], st.outcomes[laneChanged], st.outcomes[worsened], st.unusable)
 	switch mem.processes {
 	case 0:
 		b.WriteString("  memory     could not read Ollama's model runner")

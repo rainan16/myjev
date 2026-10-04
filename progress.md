@@ -72,6 +72,18 @@ Plan: `task_plan_tev.md`. Branch: `tev-vs-gemma`.
   - `README.md`, `task_plan.md`, `task_plan_tev.md`, `findings.md`, `progress.md`
   - `cmd/llmbot/main.go`, `cmd/llmbot/stats.go`, `cmd/llmbot/llmbot_test.go`
 
+### Walk-through and follow-up (same day)
+- **Status:** the walk-through item stays open at the user's request. The user was shown the result and the implementation, watched Gemma and both Tev models drive, and asked for the changes below
+- Actions taken:
+  - Found why Tev and Gemma both crashed at tick 836 and fixed the harness in four steps: recheck before sending, answer time in `clear lane beyond`, relative `clear`, and a recheck that counts only the answers still to come
+  - Game, at the user's request: no upper speed limit; start speed 50
+  - README: suggested pace 0.5; the rules described; the old table marked as predating the changes; a second table with the runs on the new road
+  - Runs on seed 7 at pace 0.5 and 0.7 before and after each step; see `findings.md`
+- Files created/modified:
+  - `cmd/llmbot/prompt.go`, `cmd/llmbot/stats.go`, `cmd/llmbot/main.go`, `cmd/llmbot/llmbot_test.go`
+  - `internal/game/game.go`, `internal/game/game_test.go`, `cmd/bot/main_test.go`
+  - `README.md`, `docs/API.md`, `AGENTS.md`, `task_plan.md`, `task_plan_tev.md`, `findings.md`, `progress.md`
+
 ## Test Results
 | Test | Input | Expected | Actual | Status |
 |------|-------|----------|--------|--------|
@@ -93,6 +105,13 @@ Plan: `task_plan_tev.md`. Branch: `tev-vs-gemma`.
 | Quick look | 19 runs, seed 7 | a pace at which each model survives | only `tev1:4b` digested at 0.25 survived | done; see README |
 | Raw probe, all three | 7 states | survivable move | `none` every time, 4 of 7 | fails, as expected |
 
+| `go test -race ./...`, `go vet ./...`, `gofmt -l .` | after the walk-through session | pass | pass | pass |
+| Layouts for the first 2,300 ticks, 60 seeds | before and after removing the speed cap | identical | identical | pass |
+| Solver with no speed limit | 40 seeds, 60 minutes of game time | survives | survived, speed about 2,040 | pass (one-off probe) |
+| `tev1:4b` on the new road, every fix | seed 7, pace 0.5 | reaches tick 2,700 | still driving at 2,763 | pass, one run |
+| `gemma4:e2b` on the new road, every fix | seed 7, pace 0.5 | reaches tick 2,700 | crashed at 767, moved into `blocked now` | fails on the model's move |
+| `tev1:0.8b` on the new road, every fix | seed 7, pace 0.5 | reaches tick 2,700 | crashed at 357, never answers `left` | fails on the model's move |
+
 ## Error Log
 | Timestamp | Error | Attempt | Resolution |
 |-----------|-------|---------|------------|
@@ -103,8 +122,8 @@ Plan: `task_plan_tev.md`. Branch: `tev-vs-gemma`.
 ## 5-Question Reboot Check
 | Question | Answer |
 |----------|--------|
-| Where am I? | Phase 6 done except the walk-through with the user |
-| Where am I going? | Nothing left in this plan; `task_plan_jev.md` is a separate follow-up |
+| Where am I? | Phase 6 done except the walk-through with the user, which the user left open |
+| Where am I going? | The walk-through; `task_plan_jev.md` is a separate follow-up. Open by choice: re-running the README table of 19 runs |
 | What's the goal? | `cmd/llmbot` lets Tev and Gemma drive so speed, RAM and harness can be compared |
 | What have I learned? | See findings.md |
 | What have I done? | See above |

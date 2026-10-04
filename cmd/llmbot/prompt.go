@@ -31,9 +31,13 @@ const (
 )
 
 const (
-	// digestHorizon is how many ticks ahead a lane must stay free to be
-	// called clear.
+	// digestHorizon is how many ticks ahead the digest looks. A lane that
+	// stays free that long is clear.
 	digestHorizon = 60
+	// clearMargin is by how many ticks a lane must outlast the nearest
+	// blockage on the road to be called clear as well. It is the least
+	// gap the game leaves between two rows.
+	clearMargin = 12
 	// nowTicks is how close a blockage must be for the lane to count as
 	// blocked now: moving into it is a crash.
 	nowTicks = 2
@@ -52,25 +56,64 @@ const (
 
 // digested turns an observation into one sentence about the lane each
 // move leads to. All the arithmetic on distance and speed happens here,
-// so the model is left with a judgment and no calculation.
-func digested(s game.State) prompt {
+// so the model is left with a judgment and no calculation. reaction is
+// how many ticks the model takes to answer; see leadsToClear.
+func digested(s game.State, reaction int) prompt {
 	free := clearTicks(s)
-	word := func(step int) string {
-		lane := s.Lane + step
-		if lane < 0 || lane >= s.Lanes {
-			return wordWall
-		}
-		switch {
-		case free[lane] >= digestHorizon:
-			return wordClear
-		case free[lane] <= nowTicks:
-			return wordNow
-		case step != 0 && leadsToClear(free, lane, step):
-			return wordBeyond
-		}
-		return wordSoon
-	}
+	word := func(step int) string { return laneWord(s, free, step, reaction, 0) }
 	return prompt{sentence(word(-1), word(0), word(1)), digestedInstructions}
+}
+
+// laneWord is the word for the lane that lies step lanes from the car.
+// decided is 1 when the move into that lane has been decided already and
+// 0 when the driver has yet to be asked; see leadsToClear.
+func laneWord(s game.State, free []int, step, reaction, decided int) string {
+	lane := s.Lane + step
+	if lane < 0 || lane >= s.Lanes {
+		return wordWall
+	}
+	switch {
+	case free[lane] >= clearFrom(free):
+		return wordClear
+	case free[lane] <= nowTicks:
+		return wordNow
+	case step != 0 && leadsToClear(free, lane, step, reaction, decided):
+		return wordBeyond
+	}
+	return wordSoon
+}
+
+// clearFrom is how many ticks a lane must stay free to be called clear:
+// the whole horizon, or long enough to outlast the nearest blockage on
+// the road. At speed the next row is inside the horizon before the last
+// one is behind the car, so no lane is free for the whole horizon, and
+// the lane to head for is the one that is free the longest. Lanes that
+// are blocked now are being passed and do not count as the nearest.
+func clearFrom(free []int) int {
+	from := digestHorizon
+	for _, f := range free {
+		if f > nowTicks {
+			from = min(from, f+clearMargin)
+		}
+	}
+	return from
+}
+
+// wordRank orders the words from the best lane to move into to the worst.
+var wordRank = map[string]int{wordClear: 0, wordBeyond: 1, wordSoon: 2, wordNow: 3, wordWall: 4}
+
+// gotWorse reports whether the lane a move leads to reads worse on the
+// state now than on the state the model was asked about. A model takes
+// several ticks to answer, and a lane worth moving into when it was
+// asked can be a crash by the time the answer arrives. On the state now
+// the move itself is decided, so only the moves after it still cost the
+// model's answer time.
+func gotWorse(asked, now game.State, action string, reaction int) bool {
+	step := 1
+	if action == "left" {
+		step = -1
+	}
+	return wordRank[laneWord(now, clearTicks(now), step, reaction, 1)] > wordRank[laneWord(asked, clearTicks(asked), step, reaction, 0)]
 }
 
 func sentence(left, current, right string) string {
@@ -126,14 +169,18 @@ func clearTicks(s game.State) []int {
 
 // leadsToClear reports whether a clear lane lies further in the direction
 // of step, and every lane on the way stays free long enough to cross.
-func leadsToClear(free []int, lane, step int) bool {
+// Each lane change on the way costs one tick for the move to land plus
+// reaction ticks for the driver to decide on it: none for a solver, five
+// or six for a model at half pace. decided is how many of those moves
+// are decided already and only have to land.
+func leadsToClear(free []int, lane, step, reaction, decided int) bool {
 	for l, moves := lane+step, 2; l >= 0 && l < len(free); l, moves = l+step, moves+1 {
-		if free[l] < digestHorizon {
+		if free[l] < clearFrom(free) {
 			continue
 		}
 		passable := true
 		for k := lane; k != l; k += step {
-			passable = passable && free[k] > moves+1
+			passable = passable && free[k] > (moves-decided)*(reaction+1)+decided+1
 		}
 		if passable {
 			return true
@@ -157,7 +204,7 @@ type rawObstacle struct {
 // raw hands the model the observation much as the API gives it: the
 // car's lane and speed and the nearest obstacles. Working out which lane
 // is blocked when is left to the model.
-func raw(s game.State) prompt {
+func raw(s game.State, _ int) prompt {
 	r := rawState{Lane: s.Lane, Speed: s.Speed, Obstacles: []rawObstacle{}}
 	for _, o := range s.Obstacles {
 		if len(r.Obstacles) == rawObstacles {
