@@ -18,12 +18,12 @@ const (
 	sent        outcome = iota // a move went to the server
 	stayed                     // the answer was to stay in lane
 	gated                      // confidence below -min-confidence
-	laneChanged                // the car left the lane the answer was about
+	laneChanged                // the car left the lane the answer was about, or is leaving it
 	worsened                   // the lane the move leads to got worse while the model answered
 )
 
 func (o outcome) String() string {
-	return [...]string{"", "", "not sent: low confidence", "not sent: the car has changed lane", "not sent: that lane got worse meanwhile"}[o]
+	return [...]string{"", "", "not sent: low confidence", "not sent: the car has changed lane or is about to", "not sent: that lane got worse meanwhile"}[o]
 }
 
 // answer is a decision together with the state it was made on.
@@ -35,21 +35,26 @@ type answer struct {
 	lane  int
 	state string
 	seen  game.State // the observation the question was about
+	// decided is 1 when seen was moved ahead to when the answer arrives,
+	// so the question counted its first move as decided; see digested.
+	decided int
 }
 
 // judge decides what to do with an answer given where the game is now.
 // A move is checked against the newest state before it is sent: the
 // model judged an older one. How old the answer is does not decide by
 // itself. A late move whose lane has not got worse still goes out.
-func judge(a answer, now game.State, reaction int, minConfidence float64) outcome {
+// moving says that a move sent earlier has yet to show up: with several
+// questions open, a second answer must not move the car a second lane.
+func judge(a answer, now game.State, reaction int, minConfidence float64, moving bool) outcome {
 	switch {
 	case a.action == "none":
 		return stayed
 	case a.hasConfidence && a.confidence < minConfidence:
 		return gated
-	case now.Lane != a.lane:
+	case now.Lane != a.lane, moving:
 		return laneChanged
-	case gotWorse(a.seen, now, a.action, reaction):
+	case gotWorse(a.seen, now, a.action, reaction, a.decided):
 		return worsened
 	}
 	return sent
@@ -66,6 +71,17 @@ func (a *ages) add(age int) {
 	if len(*a) > agesKept {
 		*a = (*a)[1:]
 	}
+}
+
+// spacing is the least number of ticks between two questions. With one
+// question at a time the next goes out as soon as the answer is in. With
+// several they are spread over the time one answer takes, so the answers
+// come in evenly and not in a bunch.
+func spacing(typical, questions int) int {
+	if questions <= 1 {
+		return 1
+	}
+	return max(1, (typical+questions-1)/questions)
 }
 
 // typical is the age to expect of the next answer: the median.

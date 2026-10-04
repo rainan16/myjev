@@ -82,7 +82,7 @@ func TestDigestDescribesTheLaneEachMoveLeadsTo(t *testing.T) {
 	}
 	all := allSentences()
 	for _, c := range cases {
-		got := digested(c.state, 0)
+		got := digested(c.state, 0, 0)
 		if got.state != c.want {
 			t.Errorf("%s:\n got  %s\n want %s", c.name, got.state, c.want)
 		}
@@ -112,7 +112,7 @@ func TestWarmUpSentencesAreAllDifferent(t *testing.T) {
 }
 
 func TestRawStateKeepsTheNearestObstaclesOnly(t *testing.T) {
-	got := raw(observation(1, 47.6, barrier(1, 30.7), traffic(0, 88.2)), 0)
+	got := raw(observation(1, 47.6, barrier(1, 30.7), traffic(0, 88.2)), 0, 0)
 	want := `{"lane":1,"speed":47.6,"obstacles":[{"lane":1,"ahead":30.7,"speed":0},{"lane":0,"ahead":88.2,"speed":20}]}`
 	if got.state != want || got.instructions != rawInstructions {
 		t.Errorf("raw = %+v", got)
@@ -123,13 +123,13 @@ func TestRawStateKeepsTheNearestObstaclesOnly(t *testing.T) {
 		many = append(many, barrier(i%4, float64(10*i)))
 	}
 	var r rawState
-	if err := json.Unmarshal([]byte(raw(observation(1, 40, many...), 0).state), &r); err != nil {
+	if err := json.Unmarshal([]byte(raw(observation(1, 40, many...), 0, 0).state), &r); err != nil {
 		t.Fatal(err)
 	}
 	if len(r.Obstacles) != rawObstacles || r.Obstacles[rawObstacles-1].Ahead != 70 {
 		t.Errorf("obstacles = %+v", r.Obstacles)
 	}
-	if empty := raw(observation(1, 40), 0).state; !strings.Contains(empty, `"obstacles":[]`) {
+	if empty := raw(observation(1, 40), 0, 0).state; !strings.Contains(empty, `"obstacles":[]`) {
 		t.Errorf("empty road = %s", empty)
 	}
 }
@@ -433,7 +433,7 @@ func TestAnswerIsGatedOrOvertakenWhateverItsAge(t *testing.T) {
 		a := answer{decision: c.d, tick: 100, lane: 1, seen: observation(1, 50)}
 		now := observation(c.nowLane, 50)
 		now.Tick = c.nowTick
-		if got := judge(a, now, 0, c.minConfidence); got != c.want {
+		if got := judge(a, now, 0, c.minConfidence, false); got != c.want {
 			t.Errorf("%s: outcome %d, want %d", c.name, got, c.want)
 		}
 	}
@@ -446,11 +446,11 @@ func TestLateMoveIsSentWhenItsLaneHasNotGotWorse(t *testing.T) {
 	a := answer{decision: decision{action: "left"}, tick: 100, lane: 1, seen: asked}
 
 	now := ahead(asked, 12)
-	if got := judge(a, now, 0, 0); got != sent {
+	if got := judge(a, now, 0, 0, false); got != sent {
 		t.Errorf("12 ticks late, left lane still free: outcome %d, want sent", got)
 	}
 	now.Obstacles = append(now.Obstacles, barrier(0, 2)) // by now there is something in it
-	if got := judge(a, now, 0, 0); got != worsened {
+	if got := judge(a, now, 0, 0, false); got != worsened {
 		t.Errorf("12 ticks late, left lane blocked now: outcome %d, want worsened", got)
 	}
 }
@@ -476,10 +476,10 @@ func TestStateIsMovedAheadToWhenTheAnswerArrives(t *testing.T) {
 
 	// What that is for: a lane that is free now and blocked on arrival.
 	near := observation(1, 50, barrier(0, 30))
-	if got := digested(near, 0).state; !strings.Contains(got, "Lane to the left: blocked soon") {
+	if got := digested(near, 0, 0).state; !strings.Contains(got, "Lane to the left: blocked soon") {
 		t.Errorf("now: %s", got)
 	}
-	if got := digested(ahead(near, 17), 0).state; !strings.Contains(got, "Lane to the left: blocked now") {
+	if got := digested(ahead(near, 17), 0, 0).state; !strings.Contains(got, "Lane to the left: blocked now") {
 		t.Errorf("17 ticks ahead: %s", got)
 	}
 }
@@ -538,7 +538,7 @@ func TestMoveIsHeldWhenItsLaneGotWorseWhileTheModelAnswered(t *testing.T) {
 		{"the other lane is as it was", left, 824, 830, sent},
 	} {
 		a := answer{decision: c.d, tick: c.asked, lane: 1, seen: at[c.asked]}
-		if got := judge(a, at[c.now], 0, 0); got != c.want {
+		if got := judge(a, at[c.now], 0, 0, false); got != c.want {
 			t.Errorf("%s: outcome %d, want %d", c.name, got, c.want)
 		}
 	}
@@ -561,7 +561,7 @@ func TestClearLaneBeyondAllowsForHowLongTheDriverTakesToAnswer(t *testing.T) {
 		3: sentence(wordClear, wordClear, wordSoon),
 		6: sentence(wordClear, wordClear, wordSoon),
 	} {
-		if got := digested(s, reaction).state; got != want {
+		if got := digested(s, reaction, 0).state; got != want {
 			t.Errorf("reaction %d ticks:\n got %s\nwant %s", reaction, got, want)
 		}
 	}
@@ -625,7 +625,7 @@ func TestMoveTowardsAClearLaneBeyondIsSentWhenTheRestCanStillBeDone(t *testing.T
 		at[s.Tick] = s
 	}
 	const reaction = 6
-	if got, want := digested(at[1713], reaction).state, sentence(wordWall, wordSoon, wordBeyond); got != want {
+	if got, want := digested(at[1713], reaction, 0).state, sentence(wordWall, wordSoon, wordBeyond); got != want {
 		t.Fatalf("asked:\n got %s\nwant %s", got, want)
 	}
 	right := answer{decision: decision{action: "right"}, tick: 1713, lane: 0, seen: at[1713]}
@@ -637,8 +637,86 @@ func TestMoveTowardsAClearLaneBeyondIsSentWhenTheRestCanStillBeDone(t *testing.T
 		{"the answer as it came, 6 ticks old", 1719, sent},
 		{"too late for the second move", 1725, worsened},
 	} {
-		if got := judge(right, at[c.now], reaction, 0); got != c.want {
+		if got := judge(right, at[c.now], reaction, 0, false); got != c.want {
 			t.Errorf("%s: outcome %d, want %d (free for %v ticks)", c.name, got, c.want, clearTicks(at[c.now]))
+		}
+	}
+}
+
+// The same row, with the car in lane 0 and a model whose answers are 9
+// to 11 ticks old, as Jev's were at full pace. The question is about the
+// road 9 ticks on, when the answer arrives. The sentence still charged
+// the first move its answer time, read "blocked soon" to the right, and
+// Jev stayed in lane 0 until it crashed at tick 1,735.
+func TestFirstMoveIsDecidedOnTheStateTheAnswerArrivesIn(t *testing.T) {
+	cfg := game.DefaultConfig()
+	cfg.StartSpeed, cfg.RampSpeed = 50, 100
+	g := game.New(cfg, 7)
+	at := map[int]game.State{}
+	for g.Snapshot().Tick <= 1725 {
+		s := g.Snapshot()
+		g.Step(game.Solve(s))
+		s.Lane = 0 // where the model had the car
+		at[s.Tick] = s
+	}
+	const lead, reaction = 9, 11
+	seen := ahead(at[1705], lead)
+	if got, want := digested(seen, reaction, 1).state, sentence(wordWall, wordSoon, wordBeyond); got != want {
+		t.Fatalf("asked about the road %d ticks on (free for %v ticks):\n got %s\nwant %s", lead, clearTicks(seen), got, want)
+	}
+	// Without the look-ahead the answer time of the first move still counts.
+	if got, want := digested(at[1705], reaction, 0).state, sentence(wordWall, wordSoon, wordNow); got != want {
+		t.Errorf("asked about the road now:\n got %s\nwant %s", got, want)
+	}
+	right := answer{decision: decision{action: "right"}, tick: 1705, lane: 0, seen: seen, decided: 1}
+	for _, c := range []struct {
+		name string
+		now  int
+		want outcome
+	}{
+		{"the answer when it was expected", 1705 + lead, sent},
+		{"too late for the second move", 1725, worsened},
+	} {
+		if got := judge(right, at[c.now], reaction, 0, false); got != c.want {
+			t.Errorf("%s: outcome %d, want %d (free for %v ticks)", c.name, got, c.want, clearTicks(at[c.now]))
+		}
+	}
+}
+
+// With several questions open, two answers can say "right" about the
+// same lane a tick apart. Only the first may move the car: inputs are
+// queued, so the second would take it one lane further than any answer
+// asked for.
+func TestSecondAnswerDoesNotMoveTheCarWhileAMoveIsOnItsWay(t *testing.T) {
+	now := observation(1, 40)
+	right := answer{decision: decision{action: "right"}, lane: 1, seen: now}
+	if got := judge(right, now, 0, 0, false); got != sent {
+		t.Errorf("no move on its way: outcome %d, want %d", got, sent)
+	}
+	if got := judge(right, now, 0, 0, true); got != laneChanged {
+		t.Errorf("a move on its way: outcome %d, want %d", got, laneChanged)
+	}
+	stay := answer{decision: decision{action: "none"}, lane: 1, seen: now}
+	if got := judge(stay, now, 0, 0, true); got != stayed {
+		t.Errorf("staying while a move is on its way: outcome %d, want %d", got, stayed)
+	}
+}
+
+func TestQuestionsAreSpreadOverTheTimeOneAnswerTakes(t *testing.T) {
+	for _, c := range []struct {
+		name               string
+		typical, questions int
+		want               int
+	}{
+		{"one at a time: as soon as the answer is in", 8, 1, 1},
+		{"three over 8 ticks", 8, 3, 3},
+		{"two over 13 ticks", 13, 2, 7},
+		{"more questions than ticks", 2, 4, 1},
+		{"nothing measured yet", 0, 3, 1},
+		{"no count given", 8, 0, 1},
+	} {
+		if got := spacing(c.typical, c.questions); got != c.want {
+			t.Errorf("%s: a question every %d ticks, want %d", c.name, got, c.want)
 		}
 	}
 }

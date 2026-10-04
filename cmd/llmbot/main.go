@@ -2,7 +2,8 @@
 // hosted Jev on TypeSafe's API. Like the
 // sample bot it talks to the game server only through the public
 // WebSocket API (see docs/API.md). The game does not wait for the model:
-// one question is open at a time, always about the newest state.
+// one question is open at a time, always about the newest state, or
+// several spread over the time one answer takes (-questions).
 package main
 
 import (
@@ -46,6 +47,7 @@ func main() {
 	form := flag.String("state", "digested", "state given to the model: digested or raw")
 	maxStale := flag.Int("max-stale", 6, "count answers older than this many ticks as late (-1 = none); a late move is still sent if its lane has not got worse")
 	lookAhead := flag.Int("look-ahead", -1, "ticks ahead of now the digested state describes (-1 = as many as the model's answers are old, 0 = off)")
+	questions := flag.Int("questions", 1, "questions open at a time; above 1 they are spread over the time one answer takes, and each is one more call to the model")
 	minConfidence := flag.Float64("min-confidence", 0, "send no move the model is less sure of than this (0 = off)")
 	warm := flag.Bool("warm", false, "ask every digested state once before driving; only helps a model that stays fast on any prompt it has seen")
 	verbose := flag.Bool("v", false, "log every decision, not only the changes")
@@ -90,6 +92,7 @@ func main() {
 		pause:         *pause,
 		maxStale:      *maxStale,
 		lookAhead:     *lookAhead,
+		questions:     *questions,
 		minConfidence: *minConfidence,
 		warm:          *warm,
 		verbose:       *verbose,
@@ -141,13 +144,14 @@ type bot struct {
 	pause         time.Duration
 	maxStale      int
 	lookAhead     int  // ticks the state is moved ahead; below zero follows the model
+	questions     int  // questions open at a time; below 1 counts as 1
 	predicts      bool // the state form can be moved ahead (digested only)
 	minConfidence float64
 	warm          bool
 	verbose       bool
 	form          string // "digested" or "raw", for the status text
 	hosted        bool   // the model runs elsewhere, so there is no runner to measure
-	build         func(s game.State, reaction int) prompt
+	build         func(s game.State, reaction, decided int) prompt
 	model         decider
 
 	conn    *websocket.Conn
@@ -196,7 +200,7 @@ func (b *bot) play(ctx context.Context, url string) error {
 // before much faster, so every digested state is asked once as well.
 func (b *bot) warmUp(ctx context.Context) error {
 	start := time.Now()
-	prompts := []prompt{b.build(game.State{}, 0)}
+	prompts := []prompt{b.build(game.State{}, 0, 0)}
 	if b.warm {
 		prompts = prompts[:0]
 		for _, s := range allSentences() {
@@ -291,14 +295,19 @@ func (b *bot) loop(ctx context.Context) error {
 		lastStatus string
 		statusTick int // tick at which the last status was sent
 
-		asking    bool // a question is open
+		open      int  // questions that have no answer yet
 		askedTick = -1 // tick of the state the last question was about
 		// A move is on its way and has not shown up yet. Asking again
-		// before it lands would move two lanes.
+		// before it lands would move two lanes, and so would a second
+		// move from a question that was open when the first was sent.
 		waiting            bool
 		sentLane, sentTick int
 	)
-	answers := make(chan answer, 1)
+	questions := max(b.questions, 1)
+	answers := make(chan answer, questions)
+	moving := func() bool {
+		return waiting && latest.Lane == sentLane && latest.Tick < sentTick+patience
+	}
 
 	// An interrupted run still gets its summary.
 	defer func() {
@@ -309,22 +318,23 @@ func (b *bot) loop(ctx context.Context) error {
 
 	ask := func() {
 		s := latest
-		if asking || s.RunID != run || s.GameOver || s.Tick == askedTick {
+		if open >= questions || s.RunID != run || s.GameOver || s.Tick < askedTick+spacing(b.ages.typical(), questions) {
 			return
 		}
 		if waiting {
-			if s.Lane == sentLane && s.Tick < sentTick+patience {
+			if moving() {
 				return
 			}
 			waiting = false
 		}
-		asking, askedTick = true, s.Tick
+		open, askedTick = open+1, s.Tick
 		// The model is asked about the road as it will be when its
 		// answer arrives, and the answer is judged against that state.
-		seen := ahead(s.State, b.lead())
-		p := b.build(seen, b.ages.slowest())
+		lead := b.lead()
+		seen, decided := ahead(s.State, lead), min(lead, 1)
+		p := b.build(seen, b.ages.slowest(), decided)
 		go func() {
-			a := answer{run: s.RunID, tick: s.Tick, lane: s.Lane, state: p.state, seen: seen}
+			a := answer{run: s.RunID, tick: s.Tick, lane: s.Lane, state: p.state, seen: seen, decided: decided}
 			a.decision, a.err = b.model.decide(ctx, p)
 			answers <- a
 		}()
@@ -342,7 +352,7 @@ func (b *bot) loop(ctx context.Context) error {
 			}
 
 		case a := <-answers:
-			asking = false
+			open--
 			if errors.Is(a.err, errUnusable) || errors.Is(a.err, errSlow) {
 				if a.run == run && !latest.GameOver {
 					st.unusable++
@@ -358,7 +368,10 @@ func (b *bot) loop(ctx context.Context) error {
 				continue // the run it was about is over
 			}
 			age := latest.Tick - a.tick
-			o := judge(a, latest.State, b.ages.slowest(), b.minConfidence)
+			// The question allowed for the slowest recent answer. The
+			// check before sending goes by the usual one: holding a move
+			// for fear of one slow answer leaves the car where it is.
+			o := judge(a, latest.State, b.ages.typical(), b.minConfidence, moving())
 			b.ages.add(age)
 			st.decided(a.decision, o, b.maxStale >= 0 && age > b.maxStale)
 			if o == sent {
@@ -413,6 +426,7 @@ func (b *bot) loop(ctx context.Context) error {
 					log.Printf("llmbot: %s", st.summary(latest, false, time.Since(started), b.memory()))
 				}
 				run, crashed, waiting, lastLine = s.RunID, false, false, ""
+				askedTick = -1            // ticks start over with the run
 				statusTick = -statusEvery // ticks start over with the run
 				st, started = &stats{}, time.Now()
 				log.Printf("llmbot: run %d, seed %d", s.RunID, s.Seed)

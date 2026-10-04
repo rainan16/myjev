@@ -57,10 +57,13 @@ const (
 // digested turns an observation into one sentence about the lane each
 // move leads to. All the arithmetic on distance and speed happens here,
 // so the model is left with a judgment and no calculation. reaction is
-// how many ticks the model takes to answer; see leadsToClear.
-func digested(s game.State, reaction int) prompt {
+// how many ticks the model takes to answer; see leadsToClear. decided is
+// 1 when s is the road as it will be when the answer arrives (see ahead):
+// by then the first move is given and only has to land, so its answer
+// time is not counted a second time.
+func digested(s game.State, reaction, decided int) prompt {
 	free := clearTicks(s)
-	word := func(step int) string { return laneWord(s, free, step, reaction, 0) }
+	word := func(step int) string { return laneWord(s, free, step, reaction, decided) }
 	return prompt{state: sentence(word(-1), word(0), word(1)), instructions: digestedInstructions}
 }
 
@@ -126,13 +129,13 @@ var wordRank = map[string]int{wordClear: 0, wordBeyond: 1, wordSoon: 2, wordNow:
 // several ticks to answer, and a lane worth moving into when it was
 // asked can be a crash by the time the answer arrives. On the state now
 // the move itself is decided, so only the moves after it still cost the
-// model's answer time.
-func gotWorse(asked, now game.State, action string, reaction int) bool {
+// model's answer time. decided is what the question was built with.
+func gotWorse(asked, now game.State, action string, reaction, decided int) bool {
 	step := 1
 	if action == "left" {
 		step = -1
 	}
-	return wordRank[laneWord(now, clearTicks(now), step, reaction, 1)] > wordRank[laneWord(asked, clearTicks(asked), step, reaction, 0)]
+	return wordRank[laneWord(now, clearTicks(now), step, reaction, 1)] > wordRank[laneWord(asked, clearTicks(asked), step, reaction, decided)]
 }
 
 func sentence(left, current, right string) string {
@@ -223,7 +226,7 @@ type rawObstacle struct {
 // raw hands the model the observation much as the API gives it: the
 // car's lane and speed and the nearest obstacles. Working out which lane
 // is blocked when is left to the model.
-func raw(s game.State, _ int) prompt {
+func raw(s game.State, _, _ int) prompt {
 	r := rawState{Lane: s.Lane, Speed: s.Speed, Obstacles: []rawObstacle{}}
 	for _, o := range s.Obstacles {
 		if len(r.Obstacles) == rawObstacles {

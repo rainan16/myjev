@@ -66,7 +66,7 @@ With the server and Ollama running:
 go run ./cmd/llmbot -model tev1:4b -seed 7
 ```
 
-The game does not wait for the model. One question is open at a time. On the digested state the model is not asked about the road as it is but as it will be when the answer arrives: the bot knows how old its model's answers usually are and moves every obstacle that many ticks on. A move is checked once more before it is sent: if the lane it leads to reads worse on the newest state than on the one the model was asked about, the move is held and the model is asked again. An answer is not dropped for its age alone; a late move that passes that check still goes out. The viewer shows the model's name as the driver and, under it, how long the last answer took and how sure the model was. To give a slow model a chance, slow the game's clock instead: `go run ./cmd/outrun -pace 0.5`.
+The game does not wait for the model. One question is open at a time, unless `-questions` allows more. On the digested state the model is not asked about the road as it is but as it will be when the answer arrives: the bot knows how old its model's answers usually are and moves every obstacle that many ticks on. A move is checked once more before it is sent: if the lane it leads to reads worse on the newest state than on the one the model was asked about, the move is held and the model is asked again. An answer is not dropped for its age alone; a late move that passes that check still goes out. The viewer shows the model's name as the driver and, under it, how long the last answer took and how sure the model was. To give a slow model a chance, slow the game's clock instead: `go run ./cmd/outrun -pace 0.5`.
 
 | Flag | Default | Meaning |
 |------|---------|---------|
@@ -74,6 +74,7 @@ The game does not wait for the model. One question is open at a time. On the dig
 | `-state` | `digested` | What the model is shown: `digested` or `raw` (see below) |
 | `-max-stale` | 6 | Count answers older than this many ticks as late (-1 counts none). It no longer drops them |
 | `-look-ahead` | -1 | Ticks ahead of now that the digested state describes: -1 follows the age of the model's answers, 0 turns it off |
+| `-questions` | 1 | Questions open at a time. Above 1 they are spread over the time one answer takes, so the model is asked more often; each is one more call. Only one answer can move the car until that move shows up |
 | `-min-confidence` | 0 | Send no move the model is less sure of than this. Only decision models report a confidence |
 | `-api` | `auto` | `systemone` or `chat`; `auto` asks Ollama whether the model is a decision model |
 | `-warm` | off | Ask every digested state once before driving |
@@ -125,6 +126,40 @@ Two changes to the harness made after the runs above, for every model: the diges
 - **Jev now drives at full pace.** 98% of its answers were late by the old rule, and 15 of the 16 moves it made were. It crashed at tick 1,735 at speed 82, where a row leaves one lane open two lanes away and comes into sight 21 ticks ahead: two answers of 8 to 11 ticks do not fit.
 - **`tev1:4b` gained nothing at full pace.** Its answer to a new sentence takes 13 ticks, the bot allows for that when it says whether a clear lane beyond can still be reached, and so it was told `blocked soon` and stayed.
 - **Gemma still did not steer**, now by judgment: with `left: clear, current: blocked soon, right: clear` it answered `none`.
+
+A third change followed. On the state moved ahead, the first move no longer costs the model's answer time when the bot works out whether a clear lane beyond can be reached: by then the answer is there and the move only has to land. Before, that time was counted twice, once in moving the state ahead and once in the sentence. One run each on seed 7 at pace 1.0; pace 0.5 and Gemma were not run again:
+
+| Model | Before | After |
+|-------|--------|-------|
+| `jev-1.13.0` | 1,735, 37 rows, 16 moves | 1,735, 37 rows, 18 moves |
+| `tev1:4b` | 357, 1 move | 1,594, 33 rows, 12 moves |
+
+- **`tev1:4b` now drives at full pace.** It was told `clear lane beyond` and took it. It crashed at tick 1,594 at speed 80: a `left` towards a clear lane beyond came back 13 ticks old and was held, because the lane had got worse by then.
+- **Jev crashed on the same row.** The sentence would have read `clear lane beyond` for a question asked between ticks 1,705 and 1,711. Jev's questions went out at 1,704 and 1,713, one answer apart. What is left is how often it is asked, not what it is told.
+
+So the fourth change lets more than one question be open: `-questions 3` asks Jev every 3 ticks, not every 7 to 9. While a move is on its way, a second answer cannot move the car again. The default stays at 1. One run each on seed 7 at pace 1.0:
+
+| Model | One question | Several |
+|-------|--------------|---------|
+| `jev-1.13.0`, `-questions 3` | 1,735, 37 rows, 18 moves | 2,999, 78 rows, 44 moves |
+| `jev-1.13.0`, `-questions 2` | | 1,735, 37 rows, 18 moves |
+| `tev1:4b`, `-questions 2` | 1,594, 33 rows, 12 moves | 357, 5 rows, 1 move |
+
+- **Jev passed 2,700 ticks at full pace.** On the row at 1,735 it was asked at tick 1,706, told `clear lane beyond`, and made both moves. It crashed at tick 2,999 at speed 106, after a `left` at confidence 0.58 into a lane that read `blocked soon`. The run used 367,083 input tokens, about $0.015, against 74,602 with one question.
+- **Two questions were not enough for Jev in the one run made.** It was asked at tick 1,707 and answered `right` towards the clear lane beyond, but the answer was 9 ticks old and the move was held: by then the room left no longer covered a second answer as slow as its slowest recent one. The service was also slower in that run, 302 ms median against 262.
+- **It does not help a local model.** Two calls at once share the one runner: `tev1:4b`'s median went from 55 to 102 ms and a new sentence took 15 ticks, not 13.
+
+The fifth change is in the check before a move is sent. It allowed for a second answer as slow as the slowest of the last 9; it now goes by the median. The sentence the model reads still allows for the slowest. Jev on seed 7 at pace 1.0, one run each, the three-question run made twice because the service stalled in the first:
+
+| `-questions` | Check by the slowest answer | Check by the median |
+|--------------|-----------------------------|---------------------|
+| 1 | 1,735, 37 rows | 1,735, 37 rows |
+| 2 | 1,735, 37 rows | 2,570, 63 rows |
+| 3 | 2,999, 78 rows | 2,999, 78 rows; before that 1,355 with three calls unanswered for 2 s |
+
+- **With two questions the held move now goes out**, and Jev passed the row at 1,735. It crashed at 2,570 with a `right` towards a clear lane beyond held, 6 ticks old.
+- **With one question nothing changed.** It was asked at tick 1,706, inside the window, but one answer shortly before had been 15 ticks old, so the sentence read `blocked soon`.
+- **A stall of the service ends a run.** Three open calls without a reply are 60 ticks without a question.
 
 #### One question per lane: tried, and taken out
 
