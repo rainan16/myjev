@@ -62,7 +62,9 @@ func judge(a answer, now game.State, reaction, maxStale int, minConfidence float
 type stats struct {
 	latencies []time.Duration
 	outcomes  [worsened + 1]int
-	unusable  int // replies that held no move
+	unusable  int // replies that held no move, or that did not come in time
+	retries   int // calls repeated because the service was busy
+	tokens    int // input tokens, where the service counts them
 
 	rows    int // rows the car has come level with
 	lastMet int // highest obstacle id the car has come level with
@@ -71,6 +73,8 @@ type stats struct {
 func (st *stats) decided(d decision, o outcome) {
 	st.latencies = append(st.latencies, d.latency)
 	st.outcomes[o]++
+	st.retries += d.retries
+	st.tokens += d.tokens
 }
 
 // observe counts rows. The obstacles of a row are met on the same tick
@@ -127,10 +131,15 @@ func (st *stats) summary(s state, crashed bool, elapsed time.Duration, mem runne
 	fmt.Fprintf(&b, "  latency    median %d ms, p95 %d ms\n", st.percentile(50).Milliseconds(), st.percentile(95).Milliseconds())
 	fmt.Fprintf(&b, "  answers    %d moves sent, %d stay, %d stale (%.0f%%), %d below confidence, %d after a lane change, %d held as the lane got worse, %d unusable\n",
 		st.outcomes[sent], st.outcomes[stayed], st.outcomes[stale], staleShare, st.outcomes[gated], st.outcomes[laneChanged], st.outcomes[worsened], st.unusable)
-	switch mem.processes {
-	case 0:
+	if st.retries > 0 || st.tokens > 0 {
+		fmt.Fprintf(&b, "  service    %d input tokens, %d retries after a busy reply\n", st.tokens, st.retries)
+	}
+	switch {
+	case mem.hosted:
+		b.WriteString("  memory     does not apply, the model is hosted")
+	case mem.processes == 0:
 		b.WriteString("  memory     could not read Ollama's model runner")
-	case 1:
+	case mem.processes == 1:
 		fmt.Fprintf(&b, "  memory     %d MB in Ollama's model runner", mem.mb)
 	default:
 		// Another model is still loaded, so the figure is not this model's.
@@ -144,6 +153,7 @@ func (st *stats) summary(s state, crashed bool, elapsed time.Duration, mem runne
 type runnerMemory struct {
 	mb        int
 	processes int
+	hosted    bool // the model runs elsewhere; there is nothing to read
 }
 
 // runnerRSS reads the memory of Ollama's model runners. /api/ps is not

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"slices"
 	"time"
@@ -22,6 +23,8 @@ type decision struct {
 	confidence    float64
 	probability   float64 // of the chosen action
 	latency       time.Duration
+	retries       int // times the call was repeated because the service was busy
+	tokens        int // input tokens the service counted, where it reports them
 }
 
 // decider is a model that picks a move. The two kinds of model need
@@ -34,11 +37,45 @@ type decider interface {
 // counts it and carries on; any other error stops the run.
 var errUnusable = errors.New("reply holds no move")
 
-// ollama is the connection both kinds of model are called through.
+// errSlow marks a call to a hosted model that got no reply in time. The
+// bot counts it like an unusable reply and asks again on a newer state.
+var errSlow = errors.New("no reply in time")
+
+// errBusy marks a reply that says to come back later: 429 or 529.
+var errBusy = errors.New("service is busy")
+
+// ollama is the connection a model is called through. Hosted Jev takes
+// the same call as Tev on Ollama, so it is the same connection with a
+// key and with patience for a busy service.
 type ollama struct {
 	url    string // base URL
 	model  string
 	client *http.Client
+
+	key     string        // sent as a bearer token when set; never logged
+	retries int           // how often a busy reply is tried again
+	backoff time.Duration // wait before the first retry, doubled each time
+}
+
+const (
+	typesafeURL = "https://api.typesafe.ai"
+	// jevModel is pinned: jev-latest can move and change the answers.
+	jevModel = "jev-1.13.0"
+	// hostedTimeout is how long a hosted call may take. An answer that
+	// late is stale at any pace, so it is given up and not waited for.
+	hostedTimeout = 2 * time.Second
+)
+
+// hosted is the connection to Jev on TypeSafe's API.
+func hosted(model, key string) ollama {
+	return ollama{
+		url:     typesafeURL,
+		model:   model,
+		client:  &http.Client{Timeout: hostedTimeout},
+		key:     key,
+		retries: 3,
+		backoff: 100 * time.Millisecond,
+	}
 }
 
 // post sends a JSON body and reports the reply and how long it took.
@@ -52,10 +89,17 @@ func (o ollama) post(ctx context.Context, path string, body any) ([]byte, time.D
 		return nil, 0, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if o.key != "" {
+		req.Header.Set("Authorization", "Bearer "+o.key)
+	}
 
 	start := time.Now()
 	resp, err := o.client.Do(req)
 	if err != nil {
+		var timeout net.Error
+		if o.key != "" && ctx.Err() == nil && errors.As(err, &timeout) && timeout.Timeout() {
+			return nil, 0, fmt.Errorf("%s: %w", o.model, errSlow)
+		}
 		return nil, 0, err
 	}
 	defer resp.Body.Close()
@@ -64,10 +108,13 @@ func (o ollama) post(ctx context.Context, path string, body any) ([]byte, time.D
 	if err != nil {
 		return nil, 0, err
 	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, 0, fmt.Errorf("%s: %s: %s", o.model, resp.Status, bytes.TrimSpace(reply))
+	switch resp.StatusCode {
+	case http.StatusOK:
+		return reply, latency, nil
+	case http.StatusTooManyRequests, 529:
+		return nil, 0, fmt.Errorf("%s: %w: %s", o.model, errBusy, resp.Status)
 	}
-	return reply, latency, nil
+	return nil, 0, fmt.Errorf("%s: %s: %s", o.model, resp.Status, bytes.TrimSpace(reply))
 }
 
 // newDecider picks the call that fits the model. api is "systemone",
@@ -121,16 +168,32 @@ type systemoneReply struct {
 		Probabilities map[string]float64 `json:"probabilities"`
 		Confidence    float64            `json:"confidence"`
 	} `json:"answers"`
+	Usage struct {
+		InputTokens int `json:"input_tokens"`
+	} `json:"usage"`
 }
 
 func (t *tev) decide(ctx context.Context, p prompt) (decision, error) {
-	data, latency, err := t.post(ctx, "/v1/systemone", systemoneRequest{
+	request := systemoneRequest{
 		Model: t.model,
 		State: p.state,
 		Questions: map[string]systemoneQuestion{
 			"move": {Type: "choice", Instructions: p.instructions, Criteria: criteria},
 		},
-	})
+	}
+	// A busy service is asked again after a wait. The wait counts as
+	// latency: the answer is that much older when it arrives.
+	start, retries := time.Now(), 0
+	data, latency, err := t.post(ctx, "/v1/systemone", request)
+	for ; errors.Is(err, errBusy) && retries < t.retries; retries++ {
+		select {
+		case <-ctx.Done():
+			return decision{}, ctx.Err()
+		case <-time.After(t.backoff << retries):
+		}
+		data, _, err = t.post(ctx, "/v1/systemone", request)
+		latency = time.Since(start)
+	}
 	if err != nil {
 		return decision{}, err
 	}
@@ -151,6 +214,8 @@ func (t *tev) decide(ctx context.Context, p prompt) (decision, error) {
 		confidence:    move.Confidence,
 		probability:   move.Probabilities[move.Choice],
 		latency:       latency,
+		retries:       retries,
+		tokens:        reply.Usage.InputTokens,
 	}, nil
 }
 

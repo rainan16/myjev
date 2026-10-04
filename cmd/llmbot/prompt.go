@@ -61,7 +61,7 @@ const (
 func digested(s game.State, reaction int) prompt {
 	free := clearTicks(s)
 	word := func(step int) string { return laneWord(s, free, step, reaction, 0) }
-	return prompt{sentence(word(-1), word(0), word(1)), digestedInstructions}
+	return prompt{state: sentence(word(-1), word(0), word(1)), instructions: digestedInstructions}
 }
 
 // laneWord is the word for the lane that lies step lanes from the car.
@@ -213,5 +213,5 @@ func raw(s game.State, _ int) prompt {
 		r.Obstacles = append(r.Obstacles, rawObstacle{o.Lane, o.Ahead, o.Speed})
 	}
 	data, _ := json.Marshal(r) // cannot fail: plain numbers
-	return prompt{string(data), rawInstructions}
+	return prompt{state: string(data), instructions: rawInstructions}
 }

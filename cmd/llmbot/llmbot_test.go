@@ -145,14 +145,14 @@ func stubOllama(t *testing.T, status int, body string) (o ollama, path *string, 
 		w.Write([]byte(body))
 	}))
 	t.Cleanup(srv.Close)
-	return ollama{srv.URL, "some-model", srv.Client()}, path, request
+	return ollama{url: srv.URL, model: "some-model", client: srv.Client()}, path, request
 }
 
 func TestTevAsksOneChoiceQuestionAndReadsTheAnswer(t *testing.T) {
 	o, path, request := stubOllama(t, http.StatusOK, `{"answers":{"move":{"type":"choice","choice":"right",
 		"probabilities":{"left":0.1,"none":0.2,"right":0.7},"confidence":0.45}}}`)
 
-	d, err := (&tev{o}).decide(context.Background(), prompt{"the state", "the question"})
+	d, err := (&tev{o}).decide(context.Background(), prompt{state: "the state", instructions: "the question"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,16 +188,156 @@ func TestTevRejectsAReplyItCannotUse(t *testing.T) {
 	}
 	for name, c := range cases {
 		o, _, _ := stubOllama(t, c.status, c.body)
-		if d, err := (&tev{o}).decide(context.Background(), prompt{"the state", "the question"}); err == nil {
+		if d, err := (&tev{o}).decide(context.Background(), prompt{state: "the state", instructions: "the question"}); err == nil {
 			t.Errorf("%s: got %+v, want an error", name, d)
 		}
+	}
+}
+
+const jevReply = `{"model":"jev-1.13.0","answers":{"move":{"type":"choice","choice":"left",
+	"probabilities":{"left":0.8,"none":0.1,"right":0.1},"confidence":0.6}},"usage":{"input_tokens":93,"output_tokens":0}}`
+
+// stubTypeSafe answers with each status in turn, the last one for good,
+// and records the Authorization header and how often it was called.
+func stubTypeSafe(t *testing.T, statuses ...int) (o ollama, auth *string, calls *int) {
+	auth, calls = new(string), new(int)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		*auth = r.Header.Get("Authorization")
+		status := statuses[min(*calls, len(statuses)-1)]
+		*calls++
+		w.WriteHeader(status)
+		if status == http.StatusOK {
+			w.Write([]byte(jevReply))
+		}
+	}))
+	t.Cleanup(srv.Close)
+	o = hosted("jev-1.13.0", "secret-key")
+	o.url, o.client, o.backoff = srv.URL, srv.Client(), 0
+	return o, auth, calls
+}
+
+func TestHostedJevIsCalledWithTheKeyAndReportsItsTokens(t *testing.T) {
+	o, auth, _ := stubTypeSafe(t, http.StatusOK)
+	d, err := (&tev{o}).decide(context.Background(), prompt{state: "the state", instructions: "the question"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if *auth != "Bearer secret-key" {
+		t.Errorf("Authorization = %q", *auth)
+	}
+	if d.action != "left" || d.confidence != 0.6 || d.tokens != 93 || d.retries != 0 {
+		t.Errorf("decision = %+v", d)
+	}
+}
+
+func TestLocalModelIsCalledWithoutAKey(t *testing.T) {
+	var auth []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth = r.Header.Values("Authorization")
+		w.Write([]byte(jevReply))
+	}))
+	defer srv.Close()
+	o := ollama{url: srv.URL, model: "tev1:4b", client: srv.Client()}
+	if _, err := (&tev{o}).decide(context.Background(), prompt{state: "the state", instructions: "the question"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(auth) != 0 {
+		t.Errorf("Authorization sent to a local model: %q", auth)
+	}
+}
+
+func TestBusyServiceIsAskedAgainAndTheRetriesAreCounted(t *testing.T) {
+	o, _, calls := stubTypeSafe(t, http.StatusTooManyRequests, 529, http.StatusOK)
+	d, err := (&tev{o}).decide(context.Background(), prompt{state: "the state", instructions: "the question"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.action != "left" || d.retries != 2 || *calls != 3 {
+		t.Errorf("decision = %+v after %d calls", d, *calls)
+	}
+
+	o, _, calls = stubTypeSafe(t, 529)
+	if _, err := (&tev{o}).decide(context.Background(), prompt{state: "the state", instructions: "the question"}); !errors.Is(err, errBusy) {
+		t.Errorf("service that stays busy: err = %v", err)
+	}
+	if *calls != 1+o.retries {
+		t.Errorf("service that stays busy was called %d times", *calls)
+	}
+}
+
+func TestHostedErrorsStopTheBotAndNeverShowTheKey(t *testing.T) {
+	for _, status := range []int{http.StatusUnauthorized, http.StatusUnprocessableEntity} {
+		o, _, calls := stubTypeSafe(t, status)
+		_, err := (&tev{o}).decide(context.Background(), prompt{state: "the state", instructions: "the question"})
+		if err == nil || errors.Is(err, errBusy) || errors.Is(err, errSlow) || errors.Is(err, errUnusable) {
+			t.Errorf("%d: err = %v, want one that stops the bot", status, err)
+		}
+		if err != nil && strings.Contains(err.Error(), "secret-key") {
+			t.Errorf("%d: the error shows the key: %v", status, err)
+		}
+		if *calls != 1 {
+			t.Errorf("%d: called %d times", status, *calls)
+		}
+	}
+}
+
+func TestKeyIsFoundInAnEnvFile(t *testing.T) {
+	cases := map[string]string{
+		"TYPESAFE_API_KEY=abc\n":                     "abc",
+		"OTHER=1\nTYPESAFE_API_KEY=\"abc\"\r\n":      "abc",
+		"# note\nexport TYPESAFE_API_KEY='abc'":      "abc",
+		"OTHER_TYPESAFE_API_KEY=abc\nTYPESAFE=abc\n": "",
+		"": "",
+	}
+	for env, want := range cases {
+		if got := keyFromEnvFile(env); got != want {
+			t.Errorf("key in %q = %q, want %q", env, got, want)
+		}
+	}
+}
+
+// timedOut is the error a client gives when its timeout runs out.
+type timedOut struct{}
+
+func (timedOut) Error() string   { return "timed out" }
+func (timedOut) Timeout() bool   { return true }
+func (timedOut) Temporary() bool { return true }
+
+type failing struct{ err error }
+
+func (f failing) RoundTrip(*http.Request) (*http.Response, error) { return nil, f.err }
+
+func TestHostedCallThatTimesOutIsSlowNotFatal(t *testing.T) {
+	o := hosted("jev-1.13.0", "secret-key")
+	o.client = &http.Client{Transport: failing{timedOut{}}}
+	if _, err := (&tev{o}).decide(context.Background(), prompt{state: "the state", instructions: "the question"}); !errors.Is(err, errSlow) {
+		t.Errorf("timeout: err = %v, want errSlow", err)
+	}
+	o.client = &http.Client{Transport: failing{errors.New("connection refused")}}
+	if _, err := (&tev{o}).decide(context.Background(), prompt{state: "the state", instructions: "the question"}); err == nil || errors.Is(err, errSlow) {
+		t.Errorf("refused: err = %v, want one that stops the bot", err)
+	}
+}
+
+func TestSummaryOfAHostedModelReportsTokensAndNoMemory(t *testing.T) {
+	var st stats
+	st.decided(decision{tokens: 93, retries: 1}, stayed)
+	st.decided(decision{tokens: 93}, sent)
+	got := st.summary(state{}, true, time.Second, runnerMemory{hosted: true})
+	for _, want := range []string{"186 input tokens, 1 retries after a busy reply", "does not apply, the model is hosted"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("summary lacks %q:\n%s", want, got)
+		}
+	}
+	if got := (&stats{}).summary(state{}, true, time.Second, runnerMemory{mb: 1, processes: 1}); strings.Contains(got, "tokens") {
+		t.Errorf("summary of a local model mentions tokens:\n%s", got)
 	}
 }
 
 func TestGemmaIsPinnedToAMoveByASchema(t *testing.T) {
 	o, path, request := stubOllama(t, http.StatusOK, `{"message":{"role":"assistant","content":"{\"move\": \"left\"}"}}`)
 
-	d, err := (&gemma{o}).decide(context.Background(), prompt{"the state", "the question"})
+	d, err := (&gemma{o}).decide(context.Background(), prompt{state: "the state", instructions: "the question"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -480,7 +620,7 @@ func TestSummaryReportsRateLatencyAndStaleShare(t *testing.T) {
 	st.unusable = 2
 	s := state{RunID: 3, Pace: 0.5}
 	s.Tick, s.Score, s.Speed = 600, 900, 51
-	got := st.summary(s, true, 10*time.Second, runnerMemory{2911, 1})
+	got := st.summary(s, true, 10*time.Second, runnerMemory{mb: 2911, processes: 1})
 	for _, want := range []string{
 		"run 3 crashed at pace 0.5: 600 ticks, 0 rows passed, score 900 (speed 51)",
 		"decisions  20, 2.0 per second",
@@ -497,7 +637,7 @@ func TestSummaryReportsRateLatencyAndStaleShare(t *testing.T) {
 	if got := (&stats{}).summary(state{}, false, 0, runnerMemory{}); !strings.Contains(got, "stopped") || !strings.Contains(got, "could not read") {
 		t.Errorf("empty summary:\n%s", got)
 	}
-	if got := st.summary(s, true, time.Second, runnerMemory{9000, 2}); !strings.Contains(got, "9000 MB in 2 model runners") {
+	if got := st.summary(s, true, time.Second, runnerMemory{mb: 9000, processes: 2}); !strings.Contains(got, "9000 MB in 2 model runners") {
 		t.Errorf("summary with two models loaded:\n%s", got)
 	}
 }
@@ -517,10 +657,10 @@ func TestRunnerMemoryIsReadFromTheRunnerProcess(t *testing.T) {
 5327392 /opt/homebrew/Cellar/ollama/0.35.1_1/libexec/lib/ollama/llama-server --model /Users/x/.ollama/models/blobs/sha256-6dd7 --port 51234
    1024 /usr/bin/some-editor llama-notes.txt
 `
-	if got := parseRunnerRSS(ps); got != (runnerMemory{5327392 / 1024, 1}) {
+	if got := parseRunnerRSS(ps); got != (runnerMemory{mb: 5327392 / 1024, processes: 1}) {
 		t.Errorf("rss = %+v", got)
 	}
-	if got := parseRunnerRSS(ps + "1048576 /opt/ollama/llama-server --model other\n"); got != (runnerMemory{5327392/1024 + 1024, 2}) {
+	if got := parseRunnerRSS(ps + "1048576 /opt/ollama/llama-server --model other\n"); got != (runnerMemory{mb: 5327392/1024 + 1024, processes: 2}) {
 		t.Errorf("two runners: rss = %+v", got)
 	}
 	if got := parseRunnerRSS("  41152 ollama serve\n"); got.processes != 0 {

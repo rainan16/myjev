@@ -1,4 +1,5 @@
-// Command llmbot lets a local model on Ollama drive the car. Like the
+// Command llmbot lets a model drive the car: a local one on Ollama, or
+// hosted Jev on TypeSafe's API. Like the
 // sample bot it talks to the game server only through the public
 // WebSocket API (see docs/API.md). The game does not wait for the model:
 // one question is open at a time, always about the newest state.
@@ -14,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"time"
 
 	"github.com/coder/websocket"
@@ -38,7 +40,8 @@ type message struct {
 func main() {
 	addr := flag.String("addr", "127.0.0.1:8765", "address of the game server")
 	url := flag.String("ollama", "http://127.0.0.1:11434", "base URL of Ollama")
-	model := flag.String("model", "tev1:0.8b", "model that drives")
+	backend := flag.String("backend", "ollama", "where the model runs: ollama, or typesafe for hosted Jev (needs TYPESAFE_API_KEY; sends the state to api.typesafe.ai)")
+	model := flag.String("model", "", "model that drives (default: tev1:0.8b on ollama, "+jevModel+" on typesafe)")
 	api := flag.String("api", "auto", "how the model is called: systemone, chat, or auto to ask Ollama")
 	form := flag.String("state", "digested", "state given to the model: digested or raw")
 	maxStale := flag.Int("max-stale", 6, "drop answers older than this many ticks (-1 = keep all)")
@@ -50,10 +53,34 @@ func main() {
 	seed := flag.Int64("seed", -1, "seed for every run (-1 = random)")
 	pause := flag.Duration("pause", 2*time.Second, "wait after a crash before restarting")
 	flag.Parse()
+	log.SetFlags(log.Ltime | log.Lmicroseconds)
+
+	var conn ollama
+	switch *backend {
+	case "ollama":
+		if *model == "" {
+			*model = "tev1:0.8b"
+		}
+		conn = ollama{url: *url, model: *model, client: &http.Client{Timeout: time.Minute}}
+	case "typesafe":
+		key := os.Getenv(keyName)
+		if key == "" {
+			env, _ := os.ReadFile(".env") // a missing file is the same as no key
+			key = keyFromEnvFile(string(env))
+		}
+		if key == "" {
+			log.Fatalf("llmbot: -backend typesafe needs an API key in %s, set in the environment or in a .env file here", keyName)
+		}
+		if *model == "" {
+			*model = jevModel
+		}
+		conn, *api = hosted(*model, key), "systemone"
+	default:
+		log.Fatalf("llmbot: unknown backend %q", *backend)
+	}
 	if *name == "" {
 		*name = *model
 	}
-	log.SetFlags(log.Ltime | log.Lmicroseconds)
 
 	b := &bot{
 		name:          *name,
@@ -65,6 +92,7 @@ func main() {
 		warm:          *warm,
 		verbose:       *verbose,
 		form:          *form,
+		hosted:        *backend != "ollama",
 	}
 	switch *form {
 	case "digested":
@@ -79,7 +107,7 @@ func main() {
 	defer stop()
 
 	var err error
-	b.model, err = newDecider(ctx, ollama{*url, *model, &http.Client{Timeout: time.Minute}}, *api)
+	b.model, err = newDecider(ctx, conn, *api)
 	if err != nil {
 		log.Fatalf("llmbot: %v", err)
 	}
@@ -87,6 +115,21 @@ func main() {
 	if err := b.play(ctx, "ws://"+*addr+"/ws"); err != nil {
 		log.Fatalf("llmbot: %v", err)
 	}
+}
+
+// keyName is the variable that holds the key for hosted Jev.
+const keyName = "TYPESAFE_API_KEY"
+
+// keyFromEnvFile finds the key in the text of a .env file: a line
+// TYPESAFE_API_KEY=value, with or without quotes around the value.
+func keyFromEnvFile(env string) string {
+	for line := range strings.Lines(env) {
+		name, value, ok := strings.Cut(strings.TrimPrefix(strings.TrimSpace(line), "export "), "=")
+		if ok && strings.TrimSpace(name) == keyName {
+			return strings.Trim(strings.TrimSpace(value), `"'`)
+		}
+	}
+	return ""
 }
 
 type bot struct {
@@ -99,6 +142,7 @@ type bot struct {
 	warm          bool
 	verbose       bool
 	form          string // "digested" or "raw", for the status text
+	hosted        bool   // the model runs elsewhere, so there is no runner to measure
 	build         func(s game.State, reaction int) prompt
 	model         decider
 
@@ -153,7 +197,7 @@ func (b *bot) warmUp(ctx context.Context) error {
 	if b.warm {
 		prompts = prompts[:0]
 		for _, s := range allSentences() {
-			prompts = append(prompts, prompt{s, digestedInstructions})
+			prompts = append(prompts, prompt{state: s, instructions: digestedInstructions})
 		}
 	}
 	for _, p := range prompts {
@@ -163,6 +207,14 @@ func (b *bot) warmUp(ctx context.Context) error {
 	}
 	log.Printf("llmbot: model is loaded, %d warm-up questions took %.1f s", len(prompts), time.Since(start).Seconds())
 	return nil
+}
+
+// memory is what the summary reports as the model's memory.
+func (b *bot) memory() runnerMemory {
+	if b.hosted {
+		return runnerMemory{hosted: true}
+	}
+	return runnerRSS()
 }
 
 // statusEvery is the least number of ticks between two status texts, so
@@ -237,7 +289,7 @@ func (b *bot) loop(ctx context.Context) error {
 	// An interrupted run still gets its summary.
 	defer func() {
 		if st != nil && !crashed {
-			log.Printf("llmbot: %s", st.summary(latest, false, time.Since(started), runnerRSS()))
+			log.Printf("llmbot: %s", st.summary(latest, false, time.Since(started), b.memory()))
 		}
 	}()
 
@@ -274,7 +326,7 @@ func (b *bot) loop(ctx context.Context) error {
 
 		case a := <-answers:
 			asking = false
-			if errors.Is(a.err, errUnusable) {
+			if errors.Is(a.err, errUnusable) || errors.Is(a.err, errSlow) {
 				if a.run == run && !latest.GameOver {
 					st.unusable++
 					log.Printf("tick %5d  lane %d  %v", a.tick, a.lane, a.err)
@@ -342,7 +394,7 @@ func (b *bot) loop(ctx context.Context) error {
 			if s.RunID != run {
 				if st != nil && !crashed {
 					// Someone reset the game in the middle of our run.
-					log.Printf("llmbot: %s", st.summary(latest, false, time.Since(started), runnerRSS()))
+					log.Printf("llmbot: %s", st.summary(latest, false, time.Since(started), b.memory()))
 				}
 				run, crashed, waiting, lastLine = s.RunID, false, false, ""
 				statusTick = -statusEvery // ticks start over with the run
@@ -358,7 +410,7 @@ func (b *bot) loop(ctx context.Context) error {
 				}
 				crashed = true
 				b.played++
-				log.Printf("llmbot: %s", st.summary(s, true, time.Since(started), runnerRSS()))
+				log.Printf("llmbot: %s", st.summary(s, true, time.Since(started), b.memory()))
 				if b.runs > 0 && b.played >= b.runs {
 					return b.send(ctx, map[string]any{"type": "release"})
 				}

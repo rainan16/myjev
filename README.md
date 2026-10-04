@@ -70,7 +70,7 @@ The game does not wait for the model. One question is open at a time, always abo
 
 | Flag | Default | Meaning |
 |------|---------|---------|
-| `-model` | `tev1:0.8b` | Model that drives |
+| `-model` | `tev1:0.8b`, or `jev-1.13.0` on `typesafe` | Model that drives |
 | `-state` | `digested` | What the model is shown: `digested` or `raw` (see below) |
 | `-max-stale` | 6 | Drop answers older than this many ticks (-1 keeps all) |
 | `-min-confidence` | 0 | Send no move the model is less sure of than this. Only decision models report a confidence |
@@ -78,9 +78,58 @@ The game does not wait for the model. One question is open at a time, always abo
 | `-warm` | off | Ask every digested state once before driving |
 | `-v` | off | Log every decision, not only the changes |
 | `-ollama` | `http://127.0.0.1:11434` | Base URL of Ollama |
+| `-backend` | `ollama` | Where the model runs: `ollama`, or `typesafe` for hosted Jev (see below) |
 | `-addr`, `-name`, `-seed`, `-runs`, `-pause` | | As for the sample bot; the name defaults to the model name |
 
 At the end of each run it prints ticks survived, rows passed, score, decisions per second, latency, how many answers were dropped as stale or held because the lane got worse, and the memory of Ollama's model runner.
+
+### Hosted Jev
+
+Jev is the hosted decision model that Tev is the local version of. It takes the same call as Tev, so the bot only needs to be pointed at it:
+
+```sh
+export TYPESAFE_API_KEY=...   # from https://console.typesafe.ai/keys; or put that line, without export, in a .env file here
+go run ./cmd/llmbot -backend typesafe -seed 7
+```
+
+This mode sends the game state (the digested sentence, or the raw obstacle list) to `api.typesafe.ai` on every decision. Nothing else leaves the machine, and the game server stays loopback only: it is the bot that makes the outbound call. The key is read from the environment, or from a `.env` file in the directory the bot is started in (`.env` is in `.gitignore`). It is sent only to that host and never logged.
+
+A call that gets no reply within 2 seconds is given up and counted with the unusable replies. A busy reply (429 or 529) is tried again up to three times with a growing wait, and that wait counts as latency. The run summary reports the input tokens used and the retries, and no memory, because there is no local runner to measure.
+
+One run each on seed 7 (2026-10-04), next to the local models on the same server and the same day. 2,700 ticks counts as surviving, and the runs that got there were stopped shortly after:
+
+| Model | Pace 0.5 | Pace 1.0 | Median latency | Decisions per second at pace 0.5 | Memory |
+|-------|----------|----------|----------------|----------------------|--------|
+| `jev-1.13.0` (hosted) | survived, 70 rows | 255, all answers stale | 247 ms | 3.8 | none locally |
+| `tev1:4b` | survived, 71 rows | 357 | 55 ms, about 420 ms when the sentence changes | 12.3 | about 4.7 GB |
+| `gemma4:e2b` | 1,181 | 255, all answers stale | 245 ms | 3.8 | about 5.0 GB |
+| `tev1:0.8b` | 357 | 357 | 25 ms | 14.9 | about 1.0 GB |
+
+- **Jev judges like `tev1:4b` and is as slow as Gemma.** On the 72 possible sentences it gave the expected move in all 56 that have one, as `tev1:4b` did, with a median confidence of 0.98 against 0.84. With the options in reverse order the scores were the same and the count of each move differed by one in 72.
+- **Its time is the round trip, and it is the same for every prompt.** About 250 ms whether the sentence is new or the same one 30 times over. `tev1:4b` is five times faster on a repeated sentence and slower on a new one.
+- **So at full pace it never steers.** 250 ms is 7 to 9 ticks, over the stale limit of 6, exactly as with Gemma. At pace 0.5 its answers were 3 to 4 ticks old and 3 of 699 were dropped.
+- **A run costs about a cent.** A call is 379 input tokens; the surviving run used 264,722, which at $0.042 per million is $0.011.
+- `jev-latest`, `jev-preview` and `jev-1.13.0` all answered as `jev-1.13.0` on that day.
+
+#### One question per lane: tried, and taken out
+
+The TypeSafe docs suggest asking many narrow questions in one call. That was tried as a third state form: the raw distances and speeds grouped by lane, one yes/no question per lane (`Is lanes.lane_2 free of obstacles the car will reach soon?`), and the rule in Go instead of in the instruction: stay on a lane the model calls clear, otherwise head for the nearest lane it calls clear. The harness calculates nothing for the prompt.
+
+| Jev, seed 7, pace 0.5 | 110 probe states, move right | Driving | Input tokens |
+|---|---|---|---|
+| Digested sentence, one Choice | 110 | passed 2,700 | 264,722 |
+| Raw list, one Choice | 67 | not run | |
+| One yes/no per lane, nearest clear lane | 104 | crashed at 2,570 | 416,524 |
+| One yes/no per lane, clear neighbour only | 100 | crashed at 764 | |
+| Two yes/no per lane (clear, blocked now) | 103 | crashed at 2,570 | 704,948 |
+
+- **Narrow questions rescue most of the raw state**: 104 against 67. Jev reads "clear or not" off the numbers of one lane right about nine times in ten.
+- **Extra questions cost tokens and no time**: 1, 4, 12 and 40 questions in one call all took 250 to 310 ms.
+- **It still does not drive as well as the digest.** What is missing is how soon a lane is blocked: a lane blocked in a while can be crossed, one blocked now cannot. A stricter rule got the car stuck, and a second question for "blocked now" found only half of those lanes. The digest answers that with arithmetic in Go.
+
+So the bot is back to the digested sentence and the fan-out is not in the code. One run per row.
+
+Single runs, as everywhere in this file. The memory column is the freshly loaded figure from the table further down, not from these runs.
 
 ### Two ways to ask
 

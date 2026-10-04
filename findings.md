@@ -61,7 +61,56 @@ Plan: `task_plan_tev.md`. Detailed figures are in its Notes; this file is the ru
 - **Game changes made by the user in the same session**: no upper speed limit (speed 90 after 90 s was the cap), and start speed 50 instead of 40 with the same rate of gain. The second moves every row, so seed 7 is a different road and nothing measured before compares with runs after
 - **Runs on the new road** (seed 7, pace 0.5, start speed 50, one run each). Before the relative `clear`: `tev1:0.8b` 357 ticks, `gemma4:e2b` 1,178, `tev1:4b` 1,708. With every fix: `tev1:0.8b` 357, `gemma4:e2b` 767, `tev1:4b` still driving at 2,763 when stopped (71 rows, score 6,962, speed 101). At pace 0.7 Gemma crashed at tick 255 without a move
 - **What is left is the models' own judgment.** `tev1:0.8b` still does not answer `left` (in lane 3 with `clear lane beyond` on the left, `none` at confidence 0.14 to 0.42). Gemma moved into a lane that read `blocked now` twice (tick 1,342 on the old road, tick 761 on the new one) and answered `none` with `left: clear, current: blocked soon, right: clear` at pace 0.7. Tev 4b did neither. The harness does not refuse a move into a `blocked now` lane: that would be the harness judging
+- **A shorter instruction does not make `tev1:4b` fast on a new sentence.** Probed on all 72 sentences, each one new: 419 ms with the current wording, about 360 ms with anything shorter, down to `Move?`. The cost of a new sentence is not in the instruction's length. The two shortest wordings got 54 of 56 right against 56 of 56, leaving a clear lane for a `clear lane beyond`. Left as it is; see Errors Encountered in `task_plan_tev.md`
 - **Not done**: the stale limit still drops a late move that would pass the recheck; the README table of 19 runs predates all of this and was not re-run; Gemma's refusal to pick between two clear lanes was not probed
+
+### Hosted Jev (2026-10-04, plan in `task_plan_jev.md`)
+- **The hosted API takes the same call as local Tev**: `POST https://api.typesafe.ai/v1/systemone` with a bearer key. `llmbot -backend typesafe` reuses the Tev caller. The reply also carries `usage`; Ollama reports it for local Tev too
+- **Model names are aliases for now**: `/v1/models` lists `jev-latest` and `jev-preview`; `jev-1.13.0` is accepted as well, and all three answered as `jev-1.13.0`
+- **Judgment matches `tev1:4b`**: on the 72 digested sentences, each new, 56 of 56 right (the 16 without a clear answer are not scored), median confidence 0.98 against 0.84 for `tev1:4b`
+- **No lean towards the first option**: with the options reversed the score was the same and the count of each move differed by one in 72
+- **About 250 ms per call, all of it round trip, and no fast path**: 244 ms median on new sentences (p95 378 ms), 260 ms on the same sentence 30 times. `tev1:4b` takes 55 ms on a repeat and about 420 ms on a change
+- **A call is 379 input tokens.** The surviving run used 264,722, about $0.011 at $0.042 per million
+- **Runs, seed 7, digested, one each, same day and same game:**
+
+| Model | Pace 0.5 | Pace 1.0 | Median latency | How it ended at pace 1.0 |
+|-------|----------|----------|----------------|--------------------------|
+| `jev-1.13.0` | stopped at 2,754, 70 rows | 255 | 247 ms (295 ms at 1.0) | All 27 answers stale, 7 to 12 ticks old; never steered |
+| `tev1:4b` | stopped at 2,760, 71 rows | 357 | 55 ms | Answered `left` correctly; answers to new sentences were 12 to 13 ticks old and dropped |
+| `gemma4:e2b` | 1,181 | 255 | 245 ms | All 32 answers stale; never steered |
+| `tev1:0.8b` | 357 | 357 | 25 ms (20 ms at 1.0) | `none` in lane 3 with the way out on its left, confidence 0.14 to 0.42 |
+
+- **Nobody survives at full pace.** Jev and Gemma are too slow for the stale limit of 6 ticks; `tev1:4b` is too slow exactly when the sentence changes; `tev1:0.8b` is fast enough and judges wrongly, at the same tick at both paces
+- **At pace 0.5 Jev and `tev1:4b` are level**: both passed tick 2,700 with 36 moves sent. Jev made 699 decisions (3 stale), `tev1:4b` 2,263 (2 stale)
+- **The key**: it sat in `.env` as `typesave-key`, which a shell cannot export; renamed to `TYPESAFE_API_KEY`. `llmbot` reads the environment first, then `.env`; `.env` is in `.gitignore`
+- **Fan-out: one yes/no per lane, the rule in code, rescues most of the raw state.** 120 real states, 110 with an expected move:
+
+| Asked | Move right | Lanes judged right | Median | Tokens per call |
+|-------|------------|--------------------|--------|-----------------|
+| Digested sentence, one Choice (what the bot does) | 110 of 110 | | 270 ms | 379 |
+| Raw obstacle list, one Choice | 67 of 110 | | 264 ms | 450 |
+| Raw obstacles grouped by lane, one yes/no per lane, rule in code | 104 of 110 | 432 of 480 | 266 ms | 728 |
+| One word per lane, one yes/no per lane, rule in code | 110 of 110 | 480 of 480 | 270 ms | 359 |
+
+- The six fan-out misses on raw are clear lanes called blocked; the per-lane answer is right 90% of the time. On words the model only reads a word back
+- **Questions are free in time, not in tokens**: 1, 4, 12 and 40 questions in one call take 251 to 306 ms; tokens go from 379 to 4,240
+- Jev on the raw state with one Choice (67 of 110) is no better than the local models were
+- Two of about 700 probe calls took longer than 2 s
+- **Driving on the fan-out (`-state fanout`, seed 7, pace 0.5, one run)**: Jev reached tick 2,570 (63 rows, speed 98), against 2,754 and still driving on the digested sentence. It crashed on the rule, not on a lane answer: from lane 0, with lane 1 called blocked and lanes 2 and 3 clear, the code headed right through lane 1. The run cost about 417K tokens against 265K
+- **Not crossing a lane called blocked is worse.** With "move to a clear neighbour only" the same answers score 100 of 110 against 104, and the run crashed at tick 764 against 2,570: the car sat in lane 0 with lanes 2 and 3 called clear and lane 1 blocked in a while. One yes/no per lane cannot tell a lane that can still be crossed from one that is blocked now. The first rule is back in the code
+- **A second question per lane for "blocked now" does not help either.** It never gives a false alarm (440 of 440) but finds only half the lanes that are blocked now (20 of 40), and the run crashed at the same tick, 2,570, at 70% more tokens. At the crash lane 1 was called neither clear nor blocked now. Eight questions took no longer than four (median 255 ms). Taken out again
+- **Where the fan-out stands**: on the grouped raw numbers Jev reads "clear or not" right nine times in ten, and that drives to tick 2,570 on seed 7. The last step, telling how soon a lane is blocked, is the arithmetic the digest does in Go, and neither rule nor extra question replaced it
+- **Decision: back to the digest.** The fan-out mode was removed from `llmbot` on 2026-10-04; Jev drives on the digested sentence, which is the only form on which it passed tick 2,700. Summary of the three fan-out variants on seed 7, pace 0.5 (probe: moves right of 110; run: one each):
+
+| Variant | Probe | Run | Input tokens |
+|---------|-------|-----|--------------|
+| Digested sentence, one Choice | 110 | passed 2,700 | 264,722 |
+| One yes/no per lane, nearest clear lane | 104 | crashed at 2,570 | 416,524 |
+| One yes/no per lane, clear neighbour only | 100 | crashed at 764 | not noted |
+| Two yes/no per lane (clear, blocked now) | 103 | crashed at 2,570 | 704,948 |
+
+- **What to take from it**: the model judges, the harness calculates holds for hosted Jev as it did for local Tev. Narrow questions move Jev from 67 to 104 of 110 on raw numbers and cost no extra time, but "how soon" is arithmetic, and that is what decides the last crashes
+- **Not done**: Jev driving on the `raw` state; the 120 probe states of the Tev plan (not kept in the repo, the 72 sentences stand in); more than one run per cell
 
 ## Technical Decisions
 | Decision | Rationale |
