@@ -41,9 +41,9 @@ type message struct {
 func main() {
 	addr := flag.String("addr", "127.0.0.1:8765", "address of the game server")
 	url := flag.String("ollama", "http://127.0.0.1:11434", "base URL of Ollama")
-	backend := flag.String("backend", "ollama", "where the model runs: ollama, or typesafe for hosted Jev (needs TYPESAFE_API_KEY; sends the state to api.typesafe.ai)")
-	model := flag.String("model", "", "model that drives (default: tev1:0.8b on ollama, "+jevModel+" on typesafe)")
-	api := flag.String("api", "auto", "how the model is called: systemone, chat, or auto to ask Ollama")
+	backend := flag.String("backend", "ollama", "where the model runs: ollama, typesafe for hosted Jev (needs TYPESAFE_API_KEY; sends the state to api.typesafe.ai), or anthropic for Claude (needs ANTHROPIC_API_KEY; sends the state to api.anthropic.com)")
+	model := flag.String("model", "", "model that drives (default: tev1:0.8b on ollama, "+jevModel+" on typesafe, "+claudeModel+" on anthropic)")
+	api := flag.String("api", "auto", "how the model is called on ollama: systemone, chat, or auto to ask Ollama")
 	form := flag.String("state", "digested", "state given to the model: digested or raw")
 	maxStale := flag.Int("max-stale", 6, "count answers older than this many ticks as late (-1 = none); a late move is still sent if its lane has not got worse")
 	lookAhead := flag.Int("look-ahead", -1, "ticks ahead of now the digested state describes (-1 = as many as the model's answers are old, 0 = off)")
@@ -66,18 +66,15 @@ func main() {
 		}
 		conn = ollama{url: *url, model: *model, client: &http.Client{Timeout: time.Minute}}
 	case "typesafe":
-		key := os.Getenv(keyName)
-		if key == "" {
-			env, _ := os.ReadFile(".env") // a missing file is the same as no key
-			key = keyFromEnvFile(string(env))
-		}
-		if key == "" {
-			log.Fatalf("llmbot: -backend typesafe needs an API key in %s, set in the environment or in a .env file here", keyName)
-		}
 		if *model == "" {
 			*model = jevModel
 		}
-		conn, *api = hosted(*model, key), "systemone"
+		conn, *api = hosted(*model, apiKey(*backend, typesafeKey)), "systemone"
+	case "anthropic":
+		if *model == "" {
+			*model = claudeModel
+		}
+		conn, *api = hostedClaude(*model, apiKey(*backend, anthropicKey), fromEnv(anthropicWorkspace)), "messages"
 	default:
 		log.Fatalf("llmbot: unknown backend %q", *backend)
 	}
@@ -122,12 +119,39 @@ func main() {
 	}
 }
 
-// keyName is the variable that holds the key for hosted Jev.
-const keyName = "TYPESAFE_API_KEY"
+// The variables that hold the key for hosted Jev and for Claude.
+const (
+	typesafeKey  = "TYPESAFE_API_KEY"
+	anthropicKey = "ANTHROPIC_API_KEY"
+	// anthropicWorkspace is optional: only a key that is not tied to a
+	// workspace needs it.
+	anthropicWorkspace = "ANTHROPIC_WORKSPACE_ID"
+)
+
+// fromEnv reads a variable from the environment or, failing that, from
+// a .env file in the working directory.
+func fromEnv(name string) string {
+	value := os.Getenv(name)
+	if value == "" {
+		env, _ := os.ReadFile(".env") // a missing file is the same as no value
+		value = keyFromEnvFile(string(env), name)
+	}
+	return value
+}
+
+// apiKey reads the key a hosted backend needs and stops the bot when
+// there is none.
+func apiKey(backend, keyName string) string {
+	key := fromEnv(keyName)
+	if key == "" {
+		log.Fatalf("llmbot: -backend %s needs an API key in %s, set in the environment or in a .env file here", backend, keyName)
+	}
+	return key
+}
 
 // keyFromEnvFile finds the key in the text of a .env file: a line
-// TYPESAFE_API_KEY=value, with or without quotes around the value.
-func keyFromEnvFile(env string) string {
+// NAME=value, with or without quotes around the value.
+func keyFromEnvFile(env, keyName string) string {
 	for line := range strings.Lines(env) {
 		name, value, ok := strings.Cut(strings.TrimPrefix(strings.TrimSpace(line), "export "), "=")
 		if ok && strings.TrimSpace(name) == keyName {

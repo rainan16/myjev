@@ -290,9 +290,13 @@ func TestKeyIsFoundInAnEnvFile(t *testing.T) {
 		"": "",
 	}
 	for env, want := range cases {
-		if got := keyFromEnvFile(env); got != want {
+		if got := keyFromEnvFile(env, typesafeKey); got != want {
 			t.Errorf("key in %q = %q, want %q", env, got, want)
 		}
+	}
+	env := "TYPESAFE_API_KEY=abc\nANTHROPIC_API_KEY=def\n"
+	if got := keyFromEnvFile(env, anthropicKey); got != "def" {
+		t.Errorf("Anthropic key in %q = %q", env, got)
 	}
 }
 
@@ -383,6 +387,113 @@ func TestGemmaReplyWithoutAMoveIsUnusableNotFatal(t *testing.T) {
 	}
 }
 
+// stubAnthropic answers every call with status and body and records the
+// headers and the request body.
+func stubAnthropic(t *testing.T, status int, body string) (o ollama, header *http.Header, request *[]byte, calls *int) {
+	header, request, calls = new(http.Header), new([]byte), new(int)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		*header = r.Header
+		*request, _ = io.ReadAll(r.Body)
+		*calls++
+		if r.URL.Path != "/v1/messages" {
+			status = http.StatusNotFound
+		}
+		w.WriteHeader(status)
+		w.Write([]byte(body))
+	}))
+	t.Cleanup(srv.Close)
+	o = hostedClaude(claudeModel, "secret-key", "")
+	o.url, o.client, o.backoff = srv.URL, srv.Client(), 0
+	return o, header, request, calls
+}
+
+func TestClaudeIsPinnedToAMoveByASchemaAndReportsItsTokens(t *testing.T) {
+	o, header, request, _ := stubAnthropic(t, http.StatusOK, `{"content":[{"type":"text","text":"{\"move\": \"left\"}"}],
+		"stop_reason":"end_turn","usage":{"input_tokens":120,"output_tokens":8}}`)
+
+	d, err := (&claude{o}).decide(context.Background(), prompt{state: "the state", instructions: "the question"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.action != "left" || d.hasConfidence || d.tokens != 120 {
+		t.Errorf("decision = %+v", d)
+	}
+	if header.Get("x-api-key") != "secret-key" || header.Get("anthropic-version") != "2023-06-01" || header.Get("Authorization") != "" {
+		t.Errorf("headers = %v", *header)
+	}
+
+	var got map[string]any
+	if err := json.Unmarshal(*request, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["model"] != "claude-haiku-4-5" || got["temperature"] != 0.0 || got["max_tokens"] != 64.0 {
+		t.Errorf("request = %s", *request)
+	}
+	if _, thinks := got["thinking"]; thinks {
+		t.Errorf("request asks for thinking: %s", *request)
+	}
+	format := got["output_config"].(map[string]any)["format"].(map[string]any)
+	schema := format["schema"].(map[string]any)
+	move := schema["properties"].(map[string]any)["move"].(map[string]any)
+	if format["type"] != "json_schema" || schema["additionalProperties"] != false || !reflect.DeepEqual(move["enum"], []any{"left", "none", "right"}) {
+		t.Errorf("format = %v", format)
+	}
+	messages := got["messages"].([]any)
+	want := "State: the state\n\nthe question\n- left: move one lane to the left\n- none: stay in the current lane\n- right: move one lane to the right"
+	if len(messages) != 1 || messages[0].(map[string]any)["content"] != want {
+		t.Errorf("messages = %v", messages)
+	}
+}
+
+func TestWorkspaceIsSentToAnthropicOnlyWhenSet(t *testing.T) {
+	o, header, _, _ := stubAnthropic(t, http.StatusOK, `{"content":[{"type":"text","text":"{\"move\": \"none\"}"}]}`)
+	if _, err := (&claude{o}).decide(context.Background(), prompt{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := header.Values("anthropic-workspace-id"); len(got) != 0 {
+		t.Errorf("workspace sent without one set: %q", got)
+	}
+	o.workspace = "wrkspc_1"
+	if _, err := (&claude{o}).decide(context.Background(), prompt{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := header.Get("anthropic-workspace-id"); got != "wrkspc_1" {
+		t.Errorf("anthropic-workspace-id = %q", got)
+	}
+}
+
+func TestClaudeReplyWithoutAMoveIsUnusableNotFatal(t *testing.T) {
+	for name, body := range map[string]string{
+		"refusal":      `{"content":[],"stop_reason":"refusal"}`,
+		"cut short":    `{"content":[{"type":"text","text":"{\"mo"}],"stop_reason":"max_tokens"}`,
+		"unknown move": `{"content":[{"type":"text","text":"{\"move\": \"up\"}"}],"stop_reason":"end_turn"}`,
+	} {
+		o, _, _, _ := stubAnthropic(t, http.StatusOK, body)
+		if _, err := (&claude{o}).decide(context.Background(), prompt{}); !errors.Is(err, errUnusable) {
+			t.Errorf("%s: err = %v, want errUnusable", name, err)
+		}
+	}
+}
+
+func TestClaudeErrorsStopTheBotBusyRepliesAreAskedAgain(t *testing.T) {
+	o, _, _, calls := stubAnthropic(t, http.StatusUnauthorized, `{"type":"error","error":{"type":"authentication_error"}}`)
+	_, err := (&claude{o}).decide(context.Background(), prompt{})
+	if err == nil || errors.Is(err, errBusy) || errors.Is(err, errUnusable) || strings.Contains(err.Error(), "secret-key") {
+		t.Errorf("401: err = %v, want one that stops the bot and does not show the key", err)
+	}
+	if *calls != 1 {
+		t.Errorf("401: called %d times", *calls)
+	}
+
+	o, _, _, calls = stubAnthropic(t, 529, `{"type":"error","error":{"type":"overloaded_error"}}`)
+	if _, err := (&claude{o}).decide(context.Background(), prompt{}); !errors.Is(err, errBusy) {
+		t.Errorf("529: err = %v, want errBusy", err)
+	}
+	if *calls != 1+o.retries {
+		t.Errorf("529: called %d times", *calls)
+	}
+}
+
 func TestDecisionModelsAreCalledOnSystemoneOthersOnChat(t *testing.T) {
 	o, path, _ := stubOllama(t, http.StatusOK, `{"capabilities":["decision"]}`)
 	if d, err := newDecider(context.Background(), o, "auto"); err != nil || reflect.TypeOf(d) != reflect.TypeFor[*tev]() {
@@ -400,6 +511,9 @@ func TestDecisionModelsAreCalledOnSystemoneOthersOnChat(t *testing.T) {
 	o, _, _ = stubOllama(t, http.StatusNotFound, `{"error":"model not found"}`)
 	if d, err := newDecider(context.Background(), o, "auto"); err == nil {
 		t.Errorf("missing model: got %T", d)
+	}
+	if d, err := newDecider(context.Background(), o, "messages"); err != nil || reflect.TypeOf(d) != reflect.TypeFor[*claude]() {
+		t.Errorf("messages: %T, %v", d, err)
 	}
 	if d, err := newDecider(context.Background(), o, "telepathy"); err == nil {
 		t.Errorf("unknown api: got %T", d)

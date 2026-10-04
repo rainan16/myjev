@@ -70,20 +70,39 @@ The game does not wait for the model. One question is open at a time, unless `-q
 
 | Flag | Default | Meaning |
 |------|---------|---------|
-| `-model` | `tev1:0.8b`, or `jev-1.13.0` on `typesafe` | Model that drives |
+| `-model` | `tev1:0.8b`, `jev-1.13.0` on `typesafe`, `claude-haiku-4-5` on `anthropic` | Model that drives |
 | `-state` | `digested` | What the model is shown: `digested` or `raw` (see below) |
 | `-max-stale` | 6 | Count answers older than this many ticks as late (-1 counts none). It no longer drops them |
 | `-look-ahead` | -1 | Ticks ahead of now that the digested state describes: -1 follows the age of the model's answers, 0 turns it off |
 | `-questions` | 1 | Questions open at a time. Above 1 they are spread over the time one answer takes, so the model is asked more often; each is one more call. Only one answer can move the car until that move shows up |
 | `-min-confidence` | 0 | Send no move the model is less sure of than this. Only decision models report a confidence |
-| `-api` | `auto` | `systemone` or `chat`; `auto` asks Ollama whether the model is a decision model |
+| `-api` | `auto` | `systemone` or `chat`; `auto` asks Ollama whether the model is a decision model. Only for `ollama`; the hosted backends set it themselves |
 | `-warm` | off | Ask every digested state once before driving |
 | `-v` | off | Log every decision, not only the changes |
 | `-ollama` | `http://127.0.0.1:11434` | Base URL of Ollama |
-| `-backend` | `ollama` | Where the model runs: `ollama`, or `typesafe` for hosted Jev (see below) |
+| `-backend` | `ollama` | Where the model runs: `ollama`, `typesafe` for hosted Jev, or `anthropic` for Claude Haiku (see below) |
 | `-addr`, `-name`, `-seed`, `-runs`, `-pause` | | As for the sample bot; the name defaults to the model name |
 
 At the end of each run it prints ticks survived, rows passed, score, decisions per second, latency, how many answers were late or held because the lane got worse, and the memory of Ollama's model runner.
+
+### Claude Haiku
+
+Claude Haiku 4.5 is a general-purpose LLM like Gemma, but hosted, so nothing has to be loaded locally:
+
+```sh
+export ANTHROPIC_API_KEY=...   # or put that line, without export, in a .env file here
+go run ./cmd/llmbot -backend anthropic -seed 7
+```
+
+It is called on `POST /v1/messages` with the same user message as Gemma and pinned down the same way: temperature 0 and a JSON schema (`output_config.format`) that leaves room for nothing but the move. Thinking is off on this model unless asked for. Like Gemma it reports no confidence, so `-min-confidence` does nothing.
+
+A key that is not tied to a workspace is refused with a 400 unless the workspace is named: set `ANTHROPIC_WORKSPACE_ID` the same way as the key.
+
+This mode sends the game state to `api.anthropic.com` on every decision; the key is read and guarded as for hosted Jev below, and the timeout, the retries on a busy reply and the summary are the same. Another Claude model can be named with `-model`, but the newer ones refuse `temperature` and think on every call, so the request would need changing for them.
+
+One run on seed 7 at pace 1.0 (2026-10-04): crashed at tick 1,594 with 33 rows passed and a score of 3,441. It answered 62 times, 1.2 per second, median 813 ms, so every answer was late (21 to 32 ticks old); 10 were moves and all 10 were still sent, none unusable. 15,880 input tokens, under $0.02. That is the tick `tev1:4b` crashed at on the same seed and pace; Gemma got to 318 and Jev to 1,735. A single run, and the same setup varies from run to run.
+
+With more questions open it did worse on that seed: `-questions 2` and `-questions 3` both crashed at tick 764 (14 rows, score 1,453), at 2.2 and 3.3 answers per second. Asked around tick 695 on `left: blocked soon, current: blocked soon, right: blocked now` it answered `left`, and that move went out; the `right` towards a clear lane that came a few ticks later was not sent because the car was already changing lane. In the left-most lane it then answered `left` again, into the wall. With one question that earlier sentence was never asked.
 
 ### Hosted Jev
 
