@@ -42,7 +42,7 @@ func main() {
 	form := flag.String("state", "digested", "state given to the model: digested or raw")
 	maxStale := flag.Int("max-stale", 6, "drop answers older than this many ticks (-1 = keep all)")
 	minConfidence := flag.Float64("min-confidence", 0, "send no move the model is less sure of than this (0 = off)")
-	warm := flag.Bool("warm", true, "ask every digested state once before driving")
+	warm := flag.Bool("warm", false, "ask every digested state once before driving; only helps a model that stays fast on any prompt it has seen")
 	verbose := flag.Bool("v", false, "log every decision, not only the changes")
 	name := flag.String("name", "", "name to drive under (default: the model name)")
 	runs := flag.Int("runs", 0, "stop after this many runs (0 = keep playing)")

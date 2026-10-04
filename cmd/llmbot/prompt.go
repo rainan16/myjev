@@ -26,8 +26,7 @@ var criteria = map[string]string{
 // so everything that varies is kept in the state.
 const (
 	digestedInstructions = "Which move keeps the car on a clear lane? Stay if the current lane is clear. " +
-		"Otherwise move to a clear lane, or to a lane that is blocked later, or towards a clear lane beyond. " +
-		"Never move into a wall or a lane that is blocked now."
+		"Otherwise move to a clear lane, or towards a clear lane beyond."
 	rawInstructions = "Which move avoids hitting an obstacle?"
 )
 
@@ -35,8 +34,6 @@ const (
 	// digestHorizon is how many ticks ahead a lane must stay free to be
 	// called clear.
 	digestHorizon = 60
-	// laterTicks separates blocked soon from blocked later.
-	laterTicks = 20
 	// nowTicks is how close a blockage must be for the lane to count as
 	// blocked now: moving into it is a crash.
 	nowTicks = 2
@@ -47,7 +44,6 @@ const (
 // Words used for a lane in the digested state.
 const (
 	wordClear  = "clear"
-	wordLater  = "blocked later"
 	wordSoon   = "blocked soon"
 	wordNow    = "blocked now"
 	wordWall   = "wall"
@@ -69,8 +65,6 @@ func digested(s game.State) prompt {
 			return wordClear
 		case free[lane] <= nowTicks:
 			return wordNow
-		case free[lane] > laterTicks:
-			return wordLater
 		case step != 0 && leadsToClear(free, lane, step):
 			return wordBeyond
 		}
@@ -86,10 +80,10 @@ func sentence(left, current, right string) string {
 // allSentences lists every state digested can produce. Asking each once
 // before driving means no sentence is new to the model during a run.
 func allSentences() []string {
-	side := []string{wordWall, wordClear, wordLater, wordSoon, wordNow, wordBeyond}
+	side := []string{wordWall, wordClear, wordSoon, wordNow, wordBeyond}
 	var all []string
 	for _, left := range side {
-		for _, current := range []string{wordClear, wordLater, wordSoon, wordNow} {
+		for _, current := range []string{wordClear, wordSoon, wordNow} {
 			for _, right := range side {
 				if left == wordWall && right == wordWall {
 					continue

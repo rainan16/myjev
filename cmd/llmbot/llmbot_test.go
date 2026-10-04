@@ -72,11 +72,6 @@ func TestDigestDescribesTheLaneEachMoveLeadsTo(t *testing.T) {
 			"Lane to the left: blocked soon. Current lane: blocked soon. Lane to the right: wall.",
 		},
 		{
-			"a row further off is told apart from a near one",
-			observation(1, 45, barrier(1, 60), barrier(2, 15), barrier(3, 15)),
-			"Lane to the left: clear. Current lane: blocked later. Lane to the right: blocked soon.",
-		},
-		{
 			"an obstacle beyond the horizon does not count yet",
 			observation(1, 45, barrier(1, 200)),
 			"Lane to the left: clear. Current lane: clear. Lane to the right: clear.",
@@ -106,9 +101,9 @@ func TestWarmUpSentencesAreAllDifferent(t *testing.T) {
 		}
 		seen[s] = true
 	}
-	// Six words for each side, four for the current lane, and no road
+	// Five words for each side, three for the current lane, and no road
 	// with a wall on both sides.
-	if want := 6*4*6 - 4; len(all) != want {
+	if want := 5*3*5 - 3; len(all) != want {
 		t.Errorf("%d sentences, want %d", len(all), want)
 	}
 }

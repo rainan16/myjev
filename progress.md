@@ -29,7 +29,7 @@ Plan: `task_plan_tev.md`. Branch: `tev-vs-gemma`.
   - `.gitignore`, `AGENTS.md` (path table), `task_plan_tev.md`, `findings.md`, `progress.md`
 
 ### Phase 3: The comparison harness
-- **Status:** built and run, waiting for the user's approval
+- **Status:** complete, approved by the user with the wording put back to Phase 2 and `-warm` off by default
 - **Started:** 2026-10-04
 - Actions taken:
   - Probed 13 variants on 140 sentences for `tev1:0.8b` and `left`; none worked

@@ -49,7 +49,7 @@ Plan: `task_plan_tev.md`. Detailed figures are in its Notes; this file is the ru
 | Caller chosen from the `decision` capability reported by `/api/show` | No guessing from the name |
 | Unusable Gemma reply is counted, not fatal | The reply text is the model's own |
 | Log prints a decision only when lane, answer, sentence or outcome differ from the last line; `-v` prints all | 213 KB of log for 45 s was unreadable |
-| Lane words: `clear`, `blocked soon`, `blocked now`, `wall`, `blocked later`, `blocked soon, clear lane beyond` | Thresholds live in the bot: 60-tick horizon, "later" is beyond 20 ticks, "now" is 2 ticks or less |
+| Lane words: `clear`, `blocked soon`, `blocked now`, `wall`, `blocked soon, clear lane beyond` | Thresholds live in the bot: 60-tick horizon, "now" is 2 ticks or less. `blocked later` was tried in Phase 3 and taken out again |
 
 ## Issues Encountered
 | Issue | Resolution |
