@@ -110,6 +110,9 @@ Plan: `task_plan_tev.md`. Detailed figures are in its Notes; this file is the ru
 | Two yes/no per lane (clear, blocked now) | 103 | crashed at 2,570 | 704,948 |
 
 - **What to take from it**: the model judges, the harness calculates holds for hosted Jev as it did for local Tev. Narrow questions move Jev from 67 to 104 of 110 on raw numbers and cost no extra time, but "how soon" is arithmetic, and that is what decides the last crashes
+- **Asking about the road as it will be, and sending late moves, makes Jev drive at full pace.** Seed 7, pace 1.0, one run: 1,735 ticks and 37 rows against 255 and no move. 98% of its answers were older than 6 ticks. At pace 0.5 it still passes 2,700, as does `tev1:4b`
+- **It does not help `tev1:4b` or Gemma at full pace** (357 and 255 as before). Tev's answer to a new sentence takes 13 ticks, which rules out `clear lane beyond`; Gemma answered `none` between two clear lanes
+- **Jev's limit at full pace is two answers in a row**: it crashed where the only open lane is two lanes away and in sight for 21 ticks
 - **Not done**: Jev driving on the `raw` state; the 120 probe states of the Tev plan (not kept in the repo, the 72 sentences stand in); more than one run per cell
 
 ## Technical Decisions

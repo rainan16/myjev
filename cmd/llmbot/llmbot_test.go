@@ -321,8 +321,8 @@ func TestHostedCallThatTimesOutIsSlowNotFatal(t *testing.T) {
 
 func TestSummaryOfAHostedModelReportsTokensAndNoMemory(t *testing.T) {
 	var st stats
-	st.decided(decision{tokens: 93, retries: 1}, stayed)
-	st.decided(decision{tokens: 93}, sent)
+	st.decided(decision{tokens: 93, retries: 1}, stayed, false)
+	st.decided(decision{tokens: 93}, sent, false)
 	got := st.summary(state{}, true, time.Second, runnerMemory{hosted: true})
 	for _, want := range []string{"186 input tokens, 1 retries after a busy reply", "does not apply, the model is hosted"} {
 		if !strings.Contains(got, want) {
@@ -406,7 +406,7 @@ func TestDecisionModelsAreCalledOnSystemoneOthersOnChat(t *testing.T) {
 	}
 }
 
-func TestAnswerIsDroppedWhenStaleGatedOrOvertaken(t *testing.T) {
+func TestAnswerIsGatedOrOvertakenWhateverItsAge(t *testing.T) {
 	sure := decision{action: "left", hasConfidence: true, confidence: 0.8}
 	unsure := decision{action: "left", hasConfidence: true, confidence: 0.2}
 	chat := decision{action: "left"}
@@ -416,30 +416,90 @@ func TestAnswerIsDroppedWhenStaleGatedOrOvertaken(t *testing.T) {
 		d             decision
 		nowTick       int
 		nowLane       int
-		maxStale      int
 		minConfidence float64
 		want          outcome
 	}{
-		{"fresh move", sure, 102, 1, 6, 0, sent},
-		{"exactly at the limit", sure, 106, 1, 6, 0, sent},
-		{"one tick past the limit", sure, 107, 1, 6, 0, stale},
-		{"old, but staleness is off", sure, 400, 1, -1, 0, sent},
-		{"stay", stay, 102, 1, 6, 0, stayed},
-		{"stay is never gated", stay, 102, 1, 6, 0.5, stayed},
-		{"an old stay counts as stale", stay, 110, 1, 6, 0, stale},
-		{"below the gate", unsure, 102, 1, 6, 0.5, gated},
-		{"above the gate", sure, 102, 1, 6, 0.5, sent},
-		{"gate off", unsure, 102, 1, 6, 0, sent},
-		{"no confidence to gate on", chat, 102, 1, 6, 0.5, sent},
-		{"the car has moved on", sure, 102, 2, 6, 0, laneChanged},
+		{"fresh move", sure, 102, 1, 0, sent},
+		{"stay", stay, 102, 1, 0, stayed},
+		{"stay is never gated", stay, 102, 1, 0.5, stayed},
+		{"an old stay is still a stay", stay, 140, 1, 0, stayed},
+		{"below the gate", unsure, 102, 1, 0.5, gated},
+		{"above the gate", sure, 102, 1, 0.5, sent},
+		{"gate off", unsure, 102, 1, 0, sent},
+		{"no confidence to gate on", chat, 102, 1, 0.5, sent},
+		{"the car has moved on", sure, 102, 2, 0, laneChanged},
 	}
 	for _, c := range cases {
 		a := answer{decision: c.d, tick: 100, lane: 1, seen: observation(1, 50)}
 		now := observation(c.nowLane, 50)
 		now.Tick = c.nowTick
-		if got := judge(a, now, 0, c.maxStale, c.minConfidence); got != c.want {
+		if got := judge(a, now, 0, c.minConfidence); got != c.want {
 			t.Errorf("%s: outcome %d, want %d", c.name, got, c.want)
 		}
+	}
+}
+
+// Jev and Gemma at full pace: every answer was 7 to 12 ticks old, all of
+// them were dropped for their age, and the car never steered.
+func TestLateMoveIsSentWhenItsLaneHasNotGotWorse(t *testing.T) {
+	asked := observation(1, 50, barrier(1, 60)) // own lane blocked, the left one free
+	a := answer{decision: decision{action: "left"}, tick: 100, lane: 1, seen: asked}
+
+	now := ahead(asked, 12)
+	if got := judge(a, now, 0, 0); got != sent {
+		t.Errorf("12 ticks late, left lane still free: outcome %d, want sent", got)
+	}
+	now.Obstacles = append(now.Obstacles, barrier(0, 2)) // by now there is something in it
+	if got := judge(a, now, 0, 0); got != worsened {
+		t.Errorf("12 ticks late, left lane blocked now: outcome %d, want worsened", got)
+	}
+}
+
+func TestStateIsMovedAheadToWhenTheAnswerArrives(t *testing.T) {
+	// At speed 50 a barrier closes by 50/30 a tick and traffic at speed
+	// 20 by 1 a tick.
+	s := observation(1, 50, barrier(1, 100), traffic(2, 40))
+	s.Tick = 300
+	got := ahead(s, 12)
+	if got.Tick != 312 || got.Lane != 1 || len(got.Obstacles) != 2 {
+		t.Fatalf("state = %+v", got)
+	}
+	if b, c := got.Obstacles[0].Ahead, got.Obstacles[1].Ahead; b != 80 || c != 28 {
+		t.Errorf("barrier %.1f ahead, want 80; traffic %.1f ahead, want 28", b, c)
+	}
+	if s.Obstacles[0].Ahead != 100 {
+		t.Error("the state it was given was changed")
+	}
+	if same := ahead(s, 0); same.Tick != 300 || same.Obstacles[0].Ahead != 100 {
+		t.Errorf("0 ticks ahead = %+v", same)
+	}
+
+	// What that is for: a lane that is free now and blocked on arrival.
+	near := observation(1, 50, barrier(0, 30))
+	if got := digested(near, 0).state; !strings.Contains(got, "Lane to the left: blocked soon") {
+		t.Errorf("now: %s", got)
+	}
+	if got := digested(ahead(near, 17), 0).state; !strings.Contains(got, "Lane to the left: blocked now") {
+		t.Errorf("17 ticks ahead: %s", got)
+	}
+}
+
+func TestBotKnowsHowOldItsModelsAnswersAre(t *testing.T) {
+	var a ages
+	if a.typical() != 0 || a.slowest() != 0 {
+		t.Errorf("no answers yet: typical %d, slowest %d", a.typical(), a.slowest())
+	}
+	for _, age := range []int{8, 7, 9, 60, 8} { // one answer hung
+		a.add(age)
+	}
+	if a.typical() != 8 || a.slowest() != 60 {
+		t.Errorf("typical %d, slowest %d, want 8 and 60", a.typical(), a.slowest())
+	}
+	for range agesKept {
+		a.add(3)
+	}
+	if a.typical() != 3 || a.slowest() != 3 || len(a) != agesKept {
+		t.Errorf("after faster answers: typical %d, slowest %d, %d kept", a.typical(), a.slowest(), len(a))
 	}
 }
 
@@ -478,7 +538,7 @@ func TestMoveIsHeldWhenItsLaneGotWorseWhileTheModelAnswered(t *testing.T) {
 		{"the other lane is as it was", left, 824, 830, sent},
 	} {
 		a := answer{decision: c.d, tick: c.asked, lane: 1, seen: at[c.asked]}
-		if got := judge(a, at[c.now], 0, 6, 0); got != c.want {
+		if got := judge(a, at[c.now], 0, 0); got != c.want {
 			t.Errorf("%s: outcome %d, want %d", c.name, got, c.want)
 		}
 	}
@@ -577,7 +637,7 @@ func TestMoveTowardsAClearLaneBeyondIsSentWhenTheRestCanStillBeDone(t *testing.T
 		{"the answer as it came, 6 ticks old", 1719, sent},
 		{"too late for the second move", 1725, worsened},
 	} {
-		if got := judge(right, at[c.now], reaction, -1, 0); got != c.want {
+		if got := judge(right, at[c.now], reaction, 0); got != c.want {
 			t.Errorf("%s: outcome %d, want %d (free for %v ticks)", c.name, got, c.want, clearTicks(at[c.now]))
 		}
 	}
@@ -605,17 +665,16 @@ func TestRowsAreCountedOnceAndTheCrashRowIsNotPassed(t *testing.T) {
 	}
 }
 
-func TestSummaryReportsRateLatencyAndStaleShare(t *testing.T) {
+func TestSummaryReportsRateLatencyAndLateShare(t *testing.T) {
 	var st stats
 	for i := 1; i <= 20; i++ {
 		o := stayed
-		switch {
-		case i <= 5:
-			o = stale
-		case i <= 8:
+		if i <= 3 {
 			o = sent
 		}
-		st.decided(decision{latency: time.Duration(i) * 10 * time.Millisecond}, o)
+		// Five answers are late: two of the moves and three stays.
+		late := i >= 2 && i <= 6
+		st.decided(decision{latency: time.Duration(i) * 10 * time.Millisecond}, o, late)
 	}
 	st.unusable = 2
 	s := state{RunID: 3, Pace: 0.5}
@@ -625,7 +684,8 @@ func TestSummaryReportsRateLatencyAndStaleShare(t *testing.T) {
 		"run 3 crashed at pace 0.5: 600 ticks, 0 rows passed, score 900 (speed 51)",
 		"decisions  20, 2.0 per second",
 		"median 110 ms, p95 200 ms",
-		"3 moves sent, 12 stay, 5 stale (25%)",
+		"3 moves sent, 17 stay,",
+		"5 answers (25%), 2 of them moves that were still sent",
 		"0 held as the lane got worse",
 		"2 unusable",
 		"2911 MB in Ollama's model runner",

@@ -17,14 +17,13 @@ type outcome int
 const (
 	sent        outcome = iota // a move went to the server
 	stayed                     // the answer was to stay in lane
-	stale                      // too old to act on
 	gated                      // confidence below -min-confidence
 	laneChanged                // the car left the lane the answer was about
 	worsened                   // the lane the move leads to got worse while the model answered
 )
 
 func (o outcome) String() string {
-	return [...]string{"", "", "dropped: stale", "not sent: low confidence", "not sent: the car has changed lane", "not sent: that lane got worse meanwhile"}[o]
+	return [...]string{"", "", "not sent: low confidence", "not sent: the car has changed lane", "not sent: that lane got worse meanwhile"}[o]
 }
 
 // answer is a decision together with the state it was made on.
@@ -39,13 +38,11 @@ type answer struct {
 }
 
 // judge decides what to do with an answer given where the game is now.
-// maxStale below zero keeps every answer however old. A move is checked
-// against the newest state before it is sent: the model judged an older
-// one.
-func judge(a answer, now game.State, reaction, maxStale int, minConfidence float64) outcome {
+// A move is checked against the newest state before it is sent: the
+// model judged an older one. How old the answer is does not decide by
+// itself. A late move whose lane has not got worse still goes out.
+func judge(a answer, now game.State, reaction int, minConfidence float64) outcome {
 	switch {
-	case maxStale >= 0 && now.Tick-a.tick > maxStale:
-		return stale
 	case a.action == "none":
 		return stayed
 	case a.hasConfidence && a.confidence < minConfidence:
@@ -58,10 +55,42 @@ func judge(a answer, now game.State, reaction, maxStale int, minConfidence float
 	return sent
 }
 
+// ages remembers how old the last few answers were, in ticks, when they
+// arrived. It is how the bot knows how long its model takes.
+type ages []int
+
+const agesKept = 9
+
+func (a *ages) add(age int) {
+	*a = append(*a, age)
+	if len(*a) > agesKept {
+		*a = (*a)[1:]
+	}
+}
+
+// typical is the age to expect of the next answer: the median.
+func (a ages) typical() int {
+	if len(a) == 0 {
+		return 0
+	}
+	return slices.Sorted(slices.Values(a))[len(a)/2]
+}
+
+// slowest is the oldest of the last few answers: what to allow for when
+// a further move has to be decided in time.
+func (a ages) slowest() int {
+	if len(a) == 0 {
+		return 0
+	}
+	return slices.Max(a)
+}
+
 // stats collects what the summary of one run reports.
 type stats struct {
 	latencies []time.Duration
 	outcomes  [worsened + 1]int
+	late      int // answers older than -max-stale
+	lateSent  int // late moves that still went out
 	unusable  int // replies that held no move, or that did not come in time
 	retries   int // calls repeated because the service was busy
 	tokens    int // input tokens, where the service counts them
@@ -70,9 +99,15 @@ type stats struct {
 	lastMet int // highest obstacle id the car has come level with
 }
 
-func (st *stats) decided(d decision, o outcome) {
+func (st *stats) decided(d decision, o outcome, late bool) {
 	st.latencies = append(st.latencies, d.latency)
 	st.outcomes[o]++
+	if late {
+		st.late++
+		if o == sent {
+			st.lateSent++
+		}
+	}
 	st.retries += d.retries
 	st.tokens += d.tokens
 }
@@ -117,20 +152,21 @@ func (st *stats) summary(s state, crashed bool, elapsed time.Duration, mem runne
 		end = "crashed"
 	}
 	n := len(st.latencies)
-	rate, staleShare := 0.0, 0.0
+	rate, lateShare := 0.0, 0.0
 	if elapsed > 0 {
 		rate = float64(n) / elapsed.Seconds()
 	}
 	if n > 0 {
-		staleShare = 100 * float64(st.outcomes[stale]) / float64(n)
+		lateShare = 100 * float64(st.late) / float64(n)
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "run %d %s at pace %v: %d ticks, %d rows passed, score %d (speed %.0f)\n",
 		s.RunID, end, s.Pace, s.Tick, st.rowsPassed(crashed), s.Score, s.Speed)
 	fmt.Fprintf(&b, "  decisions  %d, %.1f per second\n", n, rate)
 	fmt.Fprintf(&b, "  latency    median %d ms, p95 %d ms\n", st.percentile(50).Milliseconds(), st.percentile(95).Milliseconds())
-	fmt.Fprintf(&b, "  answers    %d moves sent, %d stay, %d stale (%.0f%%), %d below confidence, %d after a lane change, %d held as the lane got worse, %d unusable\n",
-		st.outcomes[sent], st.outcomes[stayed], st.outcomes[stale], staleShare, st.outcomes[gated], st.outcomes[laneChanged], st.outcomes[worsened], st.unusable)
+	fmt.Fprintf(&b, "  answers    %d moves sent, %d stay, %d below confidence, %d after a lane change, %d held as the lane got worse, %d unusable\n",
+		st.outcomes[sent], st.outcomes[stayed], st.outcomes[gated], st.outcomes[laneChanged], st.outcomes[worsened], st.unusable)
+	fmt.Fprintf(&b, "  late       %d answers (%.0f%%), %d of them moves that were still sent\n", st.late, lateShare, st.lateSent)
 	if st.retries > 0 || st.tokens > 0 {
 		fmt.Fprintf(&b, "  service    %d input tokens, %d retries after a busy reply\n", st.tokens, st.retries)
 	}

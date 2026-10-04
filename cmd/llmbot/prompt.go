@@ -64,6 +64,25 @@ func digested(s game.State, reaction int) prompt {
 	return prompt{state: sentence(word(-1), word(0), word(1)), instructions: digestedInstructions}
 }
 
+// ahead is the observation the car will have in the given number of
+// ticks if it keeps its lane: every obstacle is moved to where it will
+// be by then. A model is asked about that state, so that its answer is
+// about the road as it is when the answer arrives. The car's own gain in
+// speed over those ticks is left out; it is small.
+func ahead(s game.State, ticks int) game.State {
+	if ticks <= 0 || s.TickRate == 0 {
+		return s
+	}
+	s.Tick += ticks
+	obstacles := make([]game.ObstacleState, len(s.Obstacles))
+	for i, o := range s.Obstacles {
+		o.Ahead -= (s.Speed - o.Speed) / float64(s.TickRate) * float64(ticks)
+		obstacles[i] = o
+	}
+	s.Obstacles = obstacles
+	return s
+}
+
 // laneWord is the word for the lane that lies step lanes from the car.
 // decided is 1 when the move into that lane has been decided already and
 // 0 when the driver has yet to be asked; see leadsToClear.

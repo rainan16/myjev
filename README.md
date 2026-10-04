@@ -66,13 +66,14 @@ With the server and Ollama running:
 go run ./cmd/llmbot -model tev1:4b -seed 7
 ```
 
-The game does not wait for the model. One question is open at a time, always about the newest state, and an answer that arrives too late is dropped. A move is checked once more before it is sent: if the lane it leads to reads worse on the newest state than on the one the model was asked about, the move is held and the model is asked again. The viewer shows the model's name as the driver and, under it, how long the last answer took and how sure the model was. To give a slow model a chance, slow the game's clock instead: `go run ./cmd/outrun -pace 0.5`.
+The game does not wait for the model. One question is open at a time. On the digested state the model is not asked about the road as it is but as it will be when the answer arrives: the bot knows how old its model's answers usually are and moves every obstacle that many ticks on. A move is checked once more before it is sent: if the lane it leads to reads worse on the newest state than on the one the model was asked about, the move is held and the model is asked again. An answer is not dropped for its age alone; a late move that passes that check still goes out. The viewer shows the model's name as the driver and, under it, how long the last answer took and how sure the model was. To give a slow model a chance, slow the game's clock instead: `go run ./cmd/outrun -pace 0.5`.
 
 | Flag | Default | Meaning |
 |------|---------|---------|
 | `-model` | `tev1:0.8b`, or `jev-1.13.0` on `typesafe` | Model that drives |
 | `-state` | `digested` | What the model is shown: `digested` or `raw` (see below) |
-| `-max-stale` | 6 | Drop answers older than this many ticks (-1 keeps all) |
+| `-max-stale` | 6 | Count answers older than this many ticks as late (-1 counts none). It no longer drops them |
+| `-look-ahead` | -1 | Ticks ahead of now that the digested state describes: -1 follows the age of the model's answers, 0 turns it off |
 | `-min-confidence` | 0 | Send no move the model is less sure of than this. Only decision models report a confidence |
 | `-api` | `auto` | `systemone` or `chat`; `auto` asks Ollama whether the model is a decision model |
 | `-warm` | off | Ask every digested state once before driving |
@@ -81,7 +82,7 @@ The game does not wait for the model. One question is open at a time, always abo
 | `-backend` | `ollama` | Where the model runs: `ollama`, or `typesafe` for hosted Jev (see below) |
 | `-addr`, `-name`, `-seed`, `-runs`, `-pause` | | As for the sample bot; the name defaults to the model name |
 
-At the end of each run it prints ticks survived, rows passed, score, decisions per second, latency, how many answers were dropped as stale or held because the lane got worse, and the memory of Ollama's model runner.
+At the end of each run it prints ticks survived, rows passed, score, decisions per second, latency, how many answers were late or held because the lane got worse, and the memory of Ollama's model runner.
 
 ### Hosted Jev
 
@@ -110,6 +111,20 @@ One run each on seed 7 (2026-10-04), next to the local models on the same server
 - **So at full pace it never steers.** 250 ms is 7 to 9 ticks, over the stale limit of 6, exactly as with Gemma. At pace 0.5 its answers were 3 to 4 ticks old and 3 of 699 were dropped.
 - **A run costs about a cent.** A call is 379 input tokens; the surviving run used 264,722, which at $0.042 per million is $0.011.
 - `jev-latest`, `jev-preview` and `jev-1.13.0` all answered as `jev-1.13.0` on that day.
+
+#### Looking ahead, and sending late moves
+
+Two changes to the harness made after the runs above, for every model: the digested state is moved ahead to when the answer will arrive, and a late move is sent if its lane has not got worse. Before, every answer older than 6 ticks was dropped. One run each on seed 7:
+
+| Model | Pace 1.0 before | Pace 1.0 after | Pace 0.5 after |
+|-------|-----------------|----------------|----------------|
+| `jev-1.13.0` | 255, never steered | 1,735, 37 rows, 16 moves | passed 2,700 as before |
+| `tev1:4b` | 357 | 357 | passed 2,700 as before |
+| `gemma4:e2b` | 255, never steered | 255 | not run again |
+
+- **Jev now drives at full pace.** 98% of its answers were late by the old rule, and 15 of the 16 moves it made were. It crashed at tick 1,735 at speed 82, where a row leaves one lane open two lanes away and comes into sight 21 ticks ahead: two answers of 8 to 11 ticks do not fit.
+- **`tev1:4b` gained nothing at full pace.** Its answer to a new sentence takes 13 ticks, the bot allows for that when it says whether a clear lane beyond can still be reached, and so it was told `blocked soon` and stayed.
+- **Gemma still did not steer**, now by judgment: with `left: clear, current: blocked soon, right: clear` it answered `none`.
 
 #### One question per lane: tried, and taken out
 

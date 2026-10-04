@@ -44,7 +44,8 @@ func main() {
 	model := flag.String("model", "", "model that drives (default: tev1:0.8b on ollama, "+jevModel+" on typesafe)")
 	api := flag.String("api", "auto", "how the model is called: systemone, chat, or auto to ask Ollama")
 	form := flag.String("state", "digested", "state given to the model: digested or raw")
-	maxStale := flag.Int("max-stale", 6, "drop answers older than this many ticks (-1 = keep all)")
+	maxStale := flag.Int("max-stale", 6, "count answers older than this many ticks as late (-1 = none); a late move is still sent if its lane has not got worse")
+	lookAhead := flag.Int("look-ahead", -1, "ticks ahead of now the digested state describes (-1 = as many as the model's answers are old, 0 = off)")
 	minConfidence := flag.Float64("min-confidence", 0, "send no move the model is less sure of than this (0 = off)")
 	warm := flag.Bool("warm", false, "ask every digested state once before driving; only helps a model that stays fast on any prompt it has seen")
 	verbose := flag.Bool("v", false, "log every decision, not only the changes")
@@ -88,6 +89,7 @@ func main() {
 		seed:          *seed,
 		pause:         *pause,
 		maxStale:      *maxStale,
+		lookAhead:     *lookAhead,
 		minConfidence: *minConfidence,
 		warm:          *warm,
 		verbose:       *verbose,
@@ -96,7 +98,7 @@ func main() {
 	}
 	switch *form {
 	case "digested":
-		b.build = digested
+		b.build, b.predicts = digested, true
 	case "raw":
 		b.build, b.warm = raw, false
 	default:
@@ -138,6 +140,8 @@ type bot struct {
 	seed          int64
 	pause         time.Duration
 	maxStale      int
+	lookAhead     int  // ticks the state is moved ahead; below zero follows the model
+	predicts      bool // the state form can be moved ahead (digested only)
 	minConfidence float64
 	warm          bool
 	verbose       bool
@@ -149,9 +153,8 @@ type bot struct {
 	conn    *websocket.Conn
 	driving bool // the server has shown us as the controller
 	played  int
-	// reaction is the oldest an answer has been, in ticks, when it was
-	// still young enough to act on: how long the model can take.
-	reaction int
+	// ages is how old the last few answers were when they arrived.
+	ages ages
 }
 
 var errTakenOver = errors.New("someone else took the car")
@@ -215,6 +218,17 @@ func (b *bot) memory() runnerMemory {
 		return runnerMemory{hosted: true}
 	}
 	return runnerRSS()
+}
+
+// lead is how many ticks ahead of now the model is asked about.
+func (b *bot) lead() int {
+	switch {
+	case !b.predicts:
+		return 0
+	case b.lookAhead >= 0:
+		return b.lookAhead
+	}
+	return b.ages.typical()
 }
 
 // statusEvery is the least number of ticks between two status texts, so
@@ -305,9 +319,12 @@ func (b *bot) loop(ctx context.Context) error {
 			waiting = false
 		}
 		asking, askedTick = true, s.Tick
-		p := b.build(s.State, b.reaction)
+		// The model is asked about the road as it will be when its
+		// answer arrives, and the answer is judged against that state.
+		seen := ahead(s.State, b.lead())
+		p := b.build(seen, b.ages.slowest())
 		go func() {
-			a := answer{run: s.RunID, tick: s.Tick, lane: s.Lane, state: p.state, seen: s.State}
+			a := answer{run: s.RunID, tick: s.Tick, lane: s.Lane, state: p.state, seen: seen}
 			a.decision, a.err = b.model.decide(ctx, p)
 			answers <- a
 		}()
@@ -340,11 +357,10 @@ func (b *bot) loop(ctx context.Context) error {
 			if a.run != run || latest.GameOver {
 				continue // the run it was about is over
 			}
-			o := judge(a, latest.State, b.reaction, b.maxStale, b.minConfidence)
-			if o != stale {
-				b.reaction = max(b.reaction, latest.Tick-a.tick)
-			}
-			st.decided(a.decision, o)
+			age := latest.Tick - a.tick
+			o := judge(a, latest.State, b.ages.slowest(), b.minConfidence)
+			b.ages.add(age)
+			st.decided(a.decision, o, b.maxStale >= 0 && age > b.maxStale)
 			if o == sent {
 				if err := b.send(ctx, map[string]any{"type": "input", "action": a.action}); err != nil {
 					return err
@@ -353,7 +369,7 @@ func (b *bot) loop(ctx context.Context) error {
 			}
 			if line := fmt.Sprintf("lane %d  %-5s  %s  %v", a.lane, a.action, b.shown(a), o); b.verbose || line != lastLine {
 				lastLine = line
-				log.Print(decisionLine(a, latest.Tick-a.tick, b.shown(a), o))
+				log.Print(decisionLine(a, age, b.shown(a), o))
 			}
 			if text := statusText(b.form, a.decision); text != lastStatus && latest.Tick >= statusTick+statusEvery {
 				if err := b.send(ctx, map[string]any{"type": "status", "text": text}); err != nil {
