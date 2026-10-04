@@ -8,7 +8,7 @@ The server refuses to start on anything but a loopback address, because the API 
 
 - **Lanes** are numbered `0` (leftmost) to `3` (rightmost).
 - **Distances** are in world units along the road. `ahead` is measured from the front of the player's car.
-- **Tick**: the game advances 30 times per second. At most one lane change is applied per tick. Extra inputs are queued (up to 4) and applied on the following ticks.
+- **Tick**: the game advances 30 times per game second, which is a real second unless the server was started with a lower pace (see `pace` below). At most one lane change is applied per tick. Extra inputs are queued (up to 4) and applied on the following ticks.
 - **Actions**: `left`, `right`, `none`. One action moves the car one lane. Moving into the road edge does nothing.
 - **Controller**: one named client drives at a time. The default is `human` (the viewer's keyboard). Input from anyone else is rejected. See "Taking control" below.
 
@@ -20,6 +20,7 @@ The server refuses to start on anything but a loopback address, because the API 
   "run_id": 3,
   "seed": 42,
   "tick_rate": 30,
+  "pace": 1,
   "controller": "human",
   "game_over": false,
   "lanes": 4,
@@ -45,12 +46,13 @@ The server refuses to start on anything but a loopback address, because the API 
 | `tick` | Ticks since the run started |
 | `run_id` | Increases by one on every reset |
 | `seed` | Seed of the obstacle layout for this run. The same seed always gives the same layout |
-| `tick_rate` | Ticks per second |
+| `tick_rate` | Ticks per second of game time. Speeds are per game second too |
+| `pace` | How fast the game's clock runs against the wall clock, above 0 up to 1. It is set with the server's `-pace` flag and fixed for the life of the server. A tick lasts `1 / (tick_rate * pace)` seconds: 33 ms at pace 1, 133 ms at 0.25. Nothing else changes: the same seed and inputs give the same run, tick for tick, at any pace, so scores can be compared across paces |
 | `controller` | Name of who is driving: `human` or the name a bot claimed with |
 | `game_over` | `true` after a collision. The state is frozen until a reset |
 | `lane` | The car's lane |
 | `car_length` | Length of the player's car in world units |
-| `speed` | The car's speed in world units per second. It rises from 40 to 90 over the first 90 seconds, then holds. Steering does not affect it |
+| `speed` | The car's speed in world units per game second. It rises from 40 to 90 over the first 90 game seconds (2,700 ticks), then holds. Steering does not affect it |
 | `distance`, `score` | Distance survived. `score` is `distance` rounded down |
 | `best_score` | Best score since the server started (in memory only) |
 | `obstacles` | Everything within 300 units that is not yet behind the car, nearest first |
@@ -135,4 +137,4 @@ Client to server:
 
 `seed` is optional. A connection steers as `human` until it claims; after a claim its inputs count under the claimed name, so no `name` is needed on `input`. On a rejected or malformed message the server replies `{"type": "error", "error": "..."}` and keeps the connection open. There is no reply on success; the next state shows the result.
 
-A slow client does not slow the game down: if it falls behind, older states are dropped and it receives the most recent one.
+States come every `1 / (tick_rate * pace)` seconds. A slow client does not slow the game down: if it falls behind, older states are dropped and it receives the most recent one.

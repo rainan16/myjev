@@ -38,6 +38,9 @@ type State struct {
 	RunID      int    `json:"run_id"`
 	Controller string `json:"controller"`
 	BestScore  int    `json:"best_score"`
+	// Pace is how fast the game's clock runs against the wall clock:
+	// 1 is real time, 0.25 makes every tick last four times as long.
+	Pace float64 `json:"pace"`
 }
 
 type client struct {
@@ -46,8 +49,9 @@ type client struct {
 }
 
 type Server struct {
-	cfg game.Config
-	web fs.FS
+	cfg  game.Config
+	web  fs.FS
+	pace float64 // set before Run, never changed after
 
 	mu         sync.Mutex
 	g          *game.Game
@@ -64,6 +68,7 @@ func New(cfg game.Config, seed uint64, web fs.FS) *Server {
 	return &Server{
 		cfg:        cfg,
 		web:        web,
+		pace:       1,
 		g:          game.New(cfg, seed),
 		runID:      1,
 		controller: humanController,
@@ -83,9 +88,26 @@ func (s *Server) Handler() http.Handler {
 	return mux
 }
 
-// Run drives the game at the configured tick rate until ctx is done.
+// SetPace slows the game's clock: at pace 0.25 a tick lasts four times
+// as long. The game itself is the same at every pace, tick for tick.
+// Call it before Run.
+func (s *Server) SetPace(pace float64) error {
+	if !(pace > 0 && pace <= 1) {
+		return fmt.Errorf("pace must be above 0 and at most 1, got %v", pace)
+	}
+	s.pace = pace
+	return nil
+}
+
+// tickInterval is how long one tick lasts on the wall clock.
+func tickInterval(tickRate int, pace float64) time.Duration {
+	return time.Duration(float64(time.Second) / (float64(tickRate) * pace))
+}
+
+// Run drives the game at the configured tick rate and pace until ctx is
+// done.
 func (s *Server) Run(ctx context.Context) {
-	ticker := time.NewTicker(time.Second / time.Duration(s.cfg.TickRate))
+	ticker := time.NewTicker(tickInterval(s.cfg.TickRate, s.pace))
 	defer ticker.Stop()
 	for {
 		select {
@@ -118,6 +140,7 @@ func (s *Server) stateLocked() State {
 		RunID:      s.runID,
 		Controller: s.controller,
 		BestScore:  s.best,
+		Pace:       s.pace,
 	}
 	return st
 }

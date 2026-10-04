@@ -39,6 +39,10 @@ Plan: `task_plan_tev.md`. Detailed figures are in its Notes; this file is the ru
 - The schema keeps Gemma to a move: no unusable reply in 140 warm-up questions and 41 decisions
 - Runner memory is the sum over all `llama-server` processes, so a model that is still unloading inflates it. Unload and wait before measuring
 
+### Phase 4 (clock pace, 2026-10-04)
+- The pace does what it was meant to: Gemma, which never steered at pace 1.0, drove 1,347 ticks and passed 23 rows at pace 0.25 with no stale answer. Its crash there was judgment: it moved left into a lane that was `blocked soon` with no clear lane beyond
+- The same seed and inputs give the same state after 400 ticks at pace 0.25 and 1.0 (test), so scores compare across paces
+
 ## Technical Decisions
 | Decision | Rationale |
 |----------|-----------|

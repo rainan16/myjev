@@ -3,8 +3,10 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"math"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -115,6 +117,69 @@ func TestInputQueueIsBounded(t *testing.T) {
 	s.mu.Unlock()
 	if queued != maxQueuedActions {
 		t.Fatalf("queued %d actions, want %d", queued, maxQueuedActions)
+	}
+}
+
+func TestStateCarriesThePace(t *testing.T) {
+	s, ts := newTestServer(t)
+	if st := getState(t, ts); st.Pace != 1 {
+		t.Fatalf("default pace = %v, want 1", st.Pace)
+	}
+	if err := s.SetPace(0.25); err != nil {
+		t.Fatal(err)
+	}
+	s.tick()
+	if st := getState(t, ts); st.Pace != 0.25 || st.TickRate != 30 || st.Tick != 1 {
+		t.Fatalf("pace %v, tick rate %d, tick %d; want 0.25, 30, 1", st.Pace, st.TickRate, st.Tick)
+	}
+}
+
+func TestPaceOutsideTheRangeIsRejected(t *testing.T) {
+	s, ts := newTestServer(t)
+	for _, pace := range []float64{0, -0.5, 1.01, 4, math.NaN(), math.Inf(1)} {
+		if err := s.SetPace(pace); err == nil {
+			t.Errorf("pace %v was accepted", pace)
+		}
+	}
+	if st := getState(t, ts); st.Pace != 1 {
+		t.Fatalf("pace after rejected values = %v, want 1", st.Pace)
+	}
+	for _, pace := range []float64{0.01, 0.5, 1} {
+		if err := s.SetPace(pace); err != nil {
+			t.Errorf("pace %v: %v", pace, err)
+		}
+	}
+}
+
+func TestPaceStretchesTheTickNotTheGame(t *testing.T) {
+	for _, c := range []struct {
+		pace float64
+		want time.Duration
+	}{
+		{1, time.Second / 30},
+		{0.5, time.Second / 15},
+		{0.25, 4 * time.Second / 30},
+		{0.1, time.Second / 3},
+	} {
+		if got := tickInterval(30, c.pace); got/time.Microsecond != c.want/time.Microsecond {
+			t.Errorf("pace %v: a tick lasts %v, want %v", c.pace, got, c.want)
+		}
+	}
+
+	// The same seed and inputs give the same game at any pace.
+	slow, _ := newTestServer(t)
+	fast, _ := newTestServer(t)
+	if err := slow.SetPace(0.25); err != nil {
+		t.Fatal(err)
+	}
+	for range 400 {
+		slow.tick()
+		fast.tick()
+	}
+	a, b := slow.state(), fast.state()
+	a.Pace = b.Pace
+	if !reflect.DeepEqual(a, b) {
+		t.Fatalf("games differ after 400 ticks:\n%+v\n%+v", a, b)
 	}
 }
 

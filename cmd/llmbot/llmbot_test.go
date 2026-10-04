@@ -333,11 +333,11 @@ func TestSummaryReportsRateLatencyAndStaleShare(t *testing.T) {
 		st.decided(decision{latency: time.Duration(i) * 10 * time.Millisecond}, o)
 	}
 	st.unusable = 2
-	s := state{RunID: 3}
+	s := state{RunID: 3, Pace: 0.5}
 	s.Tick, s.Score, s.Speed = 600, 900, 51
 	got := st.summary(s, true, 10*time.Second, 2911)
 	for _, want := range []string{
-		"run 3 crashed: 600 ticks, 0 rows passed, score 900 (speed 51)",
+		"run 3 crashed at pace 0.5: 600 ticks, 0 rows passed, score 900 (speed 51)",
 		"decisions  20, 2.0 per second",
 		"median 110 ms, p95 200 ms",
 		"3 moves sent, 12 stay, 5 stale (25%)",

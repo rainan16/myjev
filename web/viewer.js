@@ -264,8 +264,11 @@
       return;
     }
 
-    // States arrive 30 times a second; glide between them.
-    const since = state.game_over ? 0 : Math.min((now - stateAt) / 1000, 0.05);
+    // Glide between states. A tick lasts 1 / (tick_rate * pace) seconds on
+    // the wall clock, and game time runs at pace times wall time.
+    const pace = state.pace || 1;
+    const tickSeconds = 1 / (state.tick_rate * pace);
+    const since = state.game_over ? 0 : Math.min((now - stateAt) / 1000, 1.5 * tickSeconds) * pace;
     const nose = state.distance + CAR_LENGTH + since * state.speed;
 
     const lanes = state.lanes;
@@ -413,7 +416,7 @@
     ctx.fillText(`DRIVER ${state.controller}`, W - 16, 36);
     ctx.font = `13px ${FONT}`;
     ctx.fillStyle = "rgba(255,255,255,0.8)";
-    ctx.fillText(`seed ${state.seed}  run ${state.run_id}`, W - 16, 60);
+    ctx.fillText(`seed ${state.seed}  run ${state.run_id}  pace ${state.pace || 1}`, W - 16, 60);
     ctx.textAlign = "left";
     ctx.fillText(state.controller === "human" ? "K left   L right" : "H take over", 16, 60);
 

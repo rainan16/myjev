@@ -13,7 +13,7 @@ A new bot, `cmd/llmbot`, lets the local Ollama models `tev1:0.8b`, `tev1:4b` and
 This is a hands-on quick look, not a benchmark.
 
 ## Current Phase
-Phase 3 (waiting for approval)
+Phase 4 (waiting for approval)
 
 ## Phases
 
@@ -47,18 +47,18 @@ Everything the bot needs so the three models can be put side by side.
 - [x] `-min-confidence` gate, off by default
 - [x] End-of-run summary: ticks survived, rows passed, score, decisions per second, median and p95 latency, share dropped as stale, runner process RSS
 - [x] Tests without real time or a live Ollama: prompt builders, reply parsing, stale and gate logic against an `httptest` stand-in
-- **Status:** built and run; waiting for the user's approval
+- **Status:** complete (approved 2026-10-04 with the wording put back to Phase 2)
 
 ### Phase 4: Clock pace in the server
 A small server change plus one new state field. The game core is not touched.
-- [ ] `-pace` flag on `cmd/outrun`, default 1.0; reject values outside the allowed range at startup (Key Question 5)
-- [ ] Ticker interval in `internal/server` becomes `1 / (tick_rate × pace)`; `internal/game` and `DefaultConfig` stay as they are
-- [ ] State gains `pace`; `tick_rate` keeps its meaning (game ticks per game second)
-- [ ] Viewer: show the pace on the HUD, and use the real tick length for smoothing between ticks so motion stays even at low pace
-- [ ] Server test with `httptest` that the state carries the pace, and a test of the interval calculation; no sleeping
-- [ ] `docs/API.md` and `README.md` updated in the same change
-- [ ] `go vet ./...`, `gofmt -l .`, `go test -race ./...`
-- **Status:** pending
+- [x] `-pace` flag on `cmd/outrun`, default 1.0; reject values outside the allowed range at startup (Key Question 5)
+- [x] Ticker interval in `internal/server` becomes `1 / (tick_rate × pace)`; `internal/game` and `DefaultConfig` stay as they are
+- [x] State gains `pace`; `tick_rate` keeps its meaning (game ticks per game second)
+- [x] Viewer: show the pace on the HUD, and use the real tick length for smoothing between ticks so motion stays even at low pace
+- [x] Server test with `httptest` that the state carries the pace, and a test of the interval calculation; no sleeping
+- [x] `docs/API.md` and `README.md` updated in the same change
+- [x] `go vet ./...`, `gofmt -l .`, `go test -race ./...`
+- **Status:** built and run; waiting for the user's approval
 
 ### Phase 5: Status text in the HUD
 An API change: docs and README move in the same change.
@@ -87,7 +87,7 @@ Proposed answers in brackets. Numbers 1 and 2 block Phase 2; the rest can be set
 2. Settled in Phase 1: coarse words, relative to the car, as one sentence. See "Digested state" under Notes
 3. Settled: default 6 ticks, `-max-stale`, -1 keeps everything. Background: it is counted in ticks, so it adapts to the pace: Gemma's 230 ms is about 7 ticks at pace 1.0 and about 2 at 0.25. [Default 6 ticks, set by `-max-stale`]
 4. Settled: the nearest 8. Background: how many obstacles in the raw state? Tev's `num_ctx` is 2050; a state with 2 obstacles used 204 input tokens. [Nearest 8]
-5. Which paces are allowed? [Any value above 0 up to 1.0]
+5. Settled: any value above 0 up to 1.0; anything else stops the server at startup
 6. Settled: the state JSON reports `pace`, because the HUD and the viewer's smoothing need it
 7. Which seed and how long is a run? [Seed 7, which the sample bot is known to survive; stop by hand after about 3 minutes]
 8. Is runner process RSS comparable across Tev (Q8) and Gemma (Q4, with a vision projector loaded)? [Report it with that caveat]
@@ -122,6 +122,8 @@ Proposed answers in brackets. Numbers 1 and 2 block Phase 2; the rest can be set
 | A stale `none` counts as stale too | The stale share is meant to show that a model is too slow, whatever it answered |
 | Rows passed are counted from the state stream: a row is new when an obstacle the car is level with has a higher id than any before; the crash row is not passed | Needs nothing from the server |
 | Back to the Phase 2 wording: no `blocked later`, the short instruction. `-warm` is off by default (user, 2026-10-04) | The Phase 3 runs were no better with `blocked later` and worse for 0.8b; warm-up only helps 0.8b |
+| The pace is set with `Server.SetPace` before `Run` and cannot change while the server runs | A fixed pace per server run keeps a run's numbers attributable to one pace |
+| `llmbot` prints the pace in its run summary | The pace a model needs is the finding, so it belongs next to the result |
 | This plan lives in `task_plan_tev.md`; `task_plan.md` is left as the game's plan | The existing plan is the project's memory and must not be overwritten |
 
 ## Errors Encountered
@@ -159,4 +161,5 @@ Proposed answers in brackets. Numbers 1 and 2 block Phase 2; the rest can be set
 - **Open after Phase 2, for the user's sign-off.** (a) The words do not rank distance: `blocked soon` covers 3 to 59 ticks. Proposal: split it into `blocked soon` and `blocked later` (for example beyond 20 ticks), or shorten the horizon. (b) `tev1:0.8b` avoids `left`. Not yet tried: other option keys or order. It may simply be a finding about the small model
 - **Phase 3 runs (2026-10-04, seed 7, pace 1.0, digested).** `tev1:0.8b`: 311 ticks, 3 rows, 29.6 decisions per second, median 21 ms, p95 34 ms, 0 stale. `tev1:4b`: 386 ticks, 4 rows, 14.0 per second, median 52 ms, p95 78 ms, 4% stale. `gemma4:e2b`: 311 ticks, 3 rows, 4.0 per second, median 248 ms, 100% stale. Runner memory printed: 5,746, 8,294 and 5,569 MB; the first is suspect, since another model was probably still unloading. The summary adds up all runner processes
 - **After Phase 3:** the user chose to go back to the Phase 2 wording, which is what the code now has (72 possible sentences). Still open from Phase 2: the words do not rank distance, which is what `tev1:4b` ran into at speed 76. Gemma needs the pace of Phase 4 before anything can be said about its judgment
+- **Phase 4 check (2026-10-04).** `-pace 0.25` gave 7.5 ticks per second measured over 4 s; 0, 1.5 and -1 are refused at startup. `gemma4:e2b` at pace 0.25 on seed 7, digested: 1,347 ticks, 23 rows passed, score 2,356, median 248 ms, answers 1 to 3 ticks old, 0 stale. At pace 1.0 it was 311 ticks with every answer stale. The viewer change (smoothing and `pace` on the HUD) was not looked at in a browser by the agent
 - Start the game with `go run ./cmd/outrun`, viewer at http://127.0.0.1:8765; Ollama at `localhost:11434`

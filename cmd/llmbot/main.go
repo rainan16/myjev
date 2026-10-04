@@ -24,8 +24,9 @@ import (
 // state is the part of the state object the bot uses.
 type state struct {
 	game.State
-	RunID      int    `json:"run_id"`
-	Controller string `json:"controller"`
+	RunID      int     `json:"run_id"`
+	Controller string  `json:"controller"`
+	Pace       float64 `json:"pace"`
 }
 
 type message struct {

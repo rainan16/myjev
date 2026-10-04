@@ -21,6 +21,7 @@ import (
 func main() {
 	addr := flag.String("addr", "127.0.0.1:8765", "loopback address to listen on")
 	seed := flag.Uint64("seed", 0, "seed of the first run (0 = random)")
+	pace := flag.Float64("pace", 1, "speed of the game's clock, above 0 up to 1 (0.25 = every tick lasts four times as long)")
 	flag.Parse()
 
 	// The API has no authentication, so it must not be reachable from
@@ -39,6 +40,9 @@ func main() {
 	defer stop()
 
 	srv := server.New(game.DefaultConfig(), *seed, web.FS)
+	if err := srv.SetPace(*pace); err != nil {
+		log.Fatalf("outrun: bad -pace: %v", err)
+	}
 	go srv.Run(ctx)
 
 	httpSrv := &http.Server{Addr: *addr, Handler: srv.Handler()}

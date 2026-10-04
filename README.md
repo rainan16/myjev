@@ -36,6 +36,7 @@ Flags:
 |------|---------|---------|
 | `-addr` | `127.0.0.1:8765` | Address to listen on. Must be a loopback address, because the API has no authentication |
 | `-seed` | random | Seed of the first run. The same seed always gives the same obstacle layout |
+| `-pace` | 1 | Speed of the game's clock, above 0 up to 1. At `-pace 0.25` every tick lasts four times as long, for you and for bots alike. The game is the same tick for tick, so scores stay comparable. The viewer shows the pace next to the seed |
 
 ## Watch a bot play
 
@@ -72,7 +73,7 @@ curl -s -X POST localhost:8765/control/release -d '{"name":"mybot"}'
 curl -s -X POST localhost:8765/reset -d '{"seed":42}'
 ```
 
-For real-time play, connect to `ws://127.0.0.1:8765/ws`. The server pushes the state 30 times a second, and you send:
+For real-time play, connect to `ws://127.0.0.1:8765/ws`. The server pushes the state 30 times a second (slower if it was started with a lower `-pace`), and you send:
 
 ```json
 {"type": "claim", "name": "mybot"}

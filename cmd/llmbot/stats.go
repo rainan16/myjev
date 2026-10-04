@@ -116,8 +116,8 @@ func (st *stats) summary(s state, crashed bool, elapsed time.Duration, rssMB int
 		staleShare = 100 * float64(st.outcomes[stale]) / float64(n)
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "run %d %s: %d ticks, %d rows passed, score %d (speed %.0f)\n",
-		s.RunID, end, s.Tick, st.rowsPassed(crashed), s.Score, s.Speed)
+	fmt.Fprintf(&b, "run %d %s at pace %v: %d ticks, %d rows passed, score %d (speed %.0f)\n",
+		s.RunID, end, s.Pace, s.Tick, st.rowsPassed(crashed), s.Score, s.Speed)
 	fmt.Fprintf(&b, "  decisions  %d, %.1f per second\n", n, rate)
 	fmt.Fprintf(&b, "  latency    median %d ms, p95 %d ms\n", st.percentile(50).Milliseconds(), st.percentile(95).Milliseconds())
 	fmt.Fprintf(&b, "  answers    %d moves sent, %d stay, %d stale (%.0f%%), %d below confidence, %d after a lane change, %d unusable\n",

@@ -40,6 +40,16 @@ Plan: `task_plan_tev.md`. Branch: `tev-vs-gemma`.
   - `cmd/llmbot/main.go`, `cmd/llmbot/prompt.go` (was `digest.go`), `cmd/llmbot/model.go` (was `tev.go`), `cmd/llmbot/stats.go`, `cmd/llmbot/llmbot_test.go`
   - `task_plan_tev.md`, `findings.md`, `progress.md`
 
+### Phase 4: Clock pace in the server
+- **Status:** built and run, waiting for the user's approval
+- **Started:** 2026-10-04
+- Actions taken:
+  - `-pace` flag, `Server.SetPace`, `tickInterval`, `pace` in the state, viewer smoothing and HUD, docs
+  - Checked the tick rate at pace 0.25 on a second port and let Gemma drive there
+- Files created/modified:
+  - `cmd/outrun/main.go`, `internal/server/server.go`, `internal/server/server_test.go`, `web/viewer.js`, `docs/API.md`, `README.md`
+  - `cmd/llmbot/main.go`, `cmd/llmbot/stats.go`, `cmd/llmbot/llmbot_test.go` (pace in the summary)
+
 ## Test Results
 | Test | Input | Expected | Actual | Status |
 |------|-------|----------|--------|--------|
@@ -52,6 +62,11 @@ Plan: `task_plan_tev.md`. Branch: `tev-vs-gemma`.
 | `go test ./...`, `go vet ./...`, `gofmt -l .` | after Phase 3 | pass, no output | pass, no output | pass |
 | Three models drive seed 7, digested | 1 run each, pace 1.0 | summary printed | 0.8b 311 ticks, 4b 386 ticks, Gemma 311 ticks and 100% stale | harness works; nobody survives |
 | `-state raw`, `-min-confidence` | live | drive | not run live; covered by unit tests only | open for Phase 6 |
+| `go test -race ./...`, `go vet ./...`, `gofmt -l .` | after Phase 4 | pass | pass | pass |
+| Tick rate at `-pace 0.25` | 4 s on a live server | 7.5 per second | 7.5 per second | pass |
+| Bad `-pace` | 0, 1.5, -1 | refused at startup | refused | pass |
+| Gemma drives at pace 0.25 | seed 7, digested | answers arrive in time | 1,347 ticks, 23 rows, 0 stale | pass |
+| Viewer at low pace | browser | smooth motion, pace on HUD | not looked at by the agent | open: user to check |
 | Raw probe, all three | 7 states | survivable move | `none` every time, 4 of 7 | fails, as expected |
 
 ## Error Log
@@ -64,8 +79,8 @@ Plan: `task_plan_tev.md`. Branch: `tev-vs-gemma`.
 ## 5-Question Reboot Check
 | Question | Answer |
 |----------|--------|
-| Where am I? | Phase 3 built, waiting for approval and a decision on the wording |
-| Where am I going? | 4 pace, 5 status text, 6 quick look |
+| Where am I? | Phase 4 built, waiting for approval |
+| Where am I going? | 5 status text, 6 quick look |
 | What's the goal? | `cmd/llmbot` lets Tev and Gemma drive so speed, RAM and harness can be compared |
 | What have I learned? | See findings.md |
 | What have I done? | See above |
