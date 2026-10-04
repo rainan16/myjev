@@ -134,7 +134,7 @@ A third change followed. On the state moved ahead, the first move no longer cost
 | `jev-1.13.0` | 1,735, 37 rows, 16 moves | 1,735, 37 rows, 18 moves |
 | `tev1:4b` | 357, 1 move | 1,594, 33 rows, 12 moves |
 
-- **`tev1:4b` now drives at full pace.** It was told `clear lane beyond` and took it. It crashed at tick 1,594 at speed 80: a `left` towards a clear lane beyond came back 13 ticks old and was held, because the lane had got worse by then.
+- **`tev1:4b` got further once, and not again.** It was told `clear lane beyond` and took it, and crashed at tick 1,594 at speed 80. Three more runs with the same code crashed at 357, as did four after the later change to the check before sending: see the last table of this section. Its answer to a new sentence takes about 450 ms, which is 13 ticks in one run and 14 in the next, and around tick 325 that one tick decides whether both moves get out.
 - **Jev crashed on the same row.** The sentence would have read `clear lane beyond` for a question asked between ticks 1,705 and 1,711. Jev's questions went out at 1,704 and 1,713, one answer apart. What is left is how often it is asked, not what it is told.
 
 So the fourth change lets more than one question be open: `-questions 3` asks Jev every 3 ticks, not every 7 to 9. While a move is on its way, a second answer cannot move the car again. The default stays at 1. One run each on seed 7 at pace 1.0:
@@ -160,6 +160,19 @@ The fifth change is in the check before a move is sent. It allowed for a second 
 - **With two questions the held move now goes out**, and Jev passed the row at 1,735. It crashed at 2,570 with a `right` towards a clear lane beyond held, 6 ticks old.
 - **With one question nothing changed.** It was asked at tick 1,706, inside the window, but one answer shortly before had been 15 ticks old, so the sentence read `blocked soon`.
 - **A stall of the service ends a run.** Three open calls without a reply are 60 ticks without a question.
+
+All four models once more with every change above in, seed 7, pace 1.0, one question at a time, each local model alone in Ollama:
+
+| Model | Result | Moves | Median latency |
+|-------|--------|-------|----------------|
+| `jev-1.13.0` | 1,735, 37 rows (2,999 with `-questions 3`) | 16 | 321 ms |
+| `tev1:4b` | 357, 5 rows, in 4 of 4 runs | 2 | 55 ms, about 450 ms on a new sentence |
+| `tev1:0.8b` | 357, 5 rows | 1 | 21 ms |
+| `gemma4:e2b` | 318, 4 rows | 2 | 257 ms |
+
+- **Gemma steered this time**, twice, with answers 11 ticks old. Its last move was a `left` into a lane that read `blocked now`.
+- **`tev1:0.8b` is unchanged**: 338 answers, none late, one move.
+- **`tev1:4b` with the check on the slowest answer again** also crashed at 357 in 3 of 3 runs, with the first move held where the median lets it through and holds the second. So the 1,594 above was the exception, and the change to the median is not what cost it.
 
 #### One question per lane: tried, and taken out
 
