@@ -46,15 +46,20 @@ var errBusy = errors.New("service is busy")
 
 // ollama is the connection a model is called through. Hosted Jev takes
 // the same call as Tev on Ollama, so it is the same connection with a
-// key and with patience for a busy service.
+// key and with patience for a busy service. Claude is reached the same
+// way, with the key in another header.
 type ollama struct {
 	url    string // base URL
 	model  string
 	client *http.Client
 
-	key     string        // sent as a bearer token when set; never logged
-	retries int           // how often a busy reply is tried again
-	backoff time.Duration // wait before the first retry, doubled each time
+	key     string // sent as a bearer token when set; never logged
+	version string // Anthropic API version; with it the key goes in x-api-key
+	// workspace is sent to Anthropic when set. A key that is not tied to
+	// a workspace is refused without it.
+	workspace string
+	retries   int           // how often a busy reply is tried again
+	backoff   time.Duration // wait before the first retry, doubled each time
 }
 
 const (
@@ -78,6 +83,20 @@ func hosted(model, key string) ollama {
 	}
 }
 
+const (
+	anthropicURL     = "https://api.anthropic.com"
+	anthropicVersion = "2023-06-01"
+	// claudeModel is the general-purpose LLM that needs no local runner.
+	claudeModel = "claude-haiku-4-5"
+)
+
+// hostedClaude is the connection to Claude on Anthropic's API.
+func hostedClaude(model, key, workspace string) ollama {
+	o := hosted(model, key)
+	o.url, o.version, o.workspace = anthropicURL, anthropicVersion, workspace
+	return o
+}
+
 // post sends a JSON body and reports the reply and how long it took.
 func (o ollama) post(ctx context.Context, path string, body any) ([]byte, time.Duration, error) {
 	data, err := json.Marshal(body)
@@ -89,7 +108,14 @@ func (o ollama) post(ctx context.Context, path string, body any) ([]byte, time.D
 		return nil, 0, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if o.key != "" {
+	switch {
+	case o.version != "":
+		req.Header.Set("x-api-key", o.key)
+		req.Header.Set("anthropic-version", o.version)
+		if o.workspace != "" {
+			req.Header.Set("anthropic-workspace-id", o.workspace)
+		}
+	case o.key != "":
 		req.Header.Set("Authorization", "Bearer "+o.key)
 	}
 
@@ -117,9 +143,26 @@ func (o ollama) post(ctx context.Context, path string, body any) ([]byte, time.D
 	return nil, 0, fmt.Errorf("%s: %s: %s", o.model, resp.Status, bytes.TrimSpace(reply))
 }
 
+// ask posts like post, and asks a busy service again after a wait. The
+// wait counts as latency: the answer is that much older when it arrives.
+func (o ollama) ask(ctx context.Context, path string, body any) (data []byte, latency time.Duration, retries int, err error) {
+	start := time.Now()
+	data, latency, err = o.post(ctx, path, body)
+	for ; errors.Is(err, errBusy) && retries < o.retries; retries++ {
+		select {
+		case <-ctx.Done():
+			return nil, 0, retries, ctx.Err()
+		case <-time.After(o.backoff << retries):
+		}
+		data, _, err = o.post(ctx, path, body)
+		latency = time.Since(start)
+	}
+	return data, latency, retries, err
+}
+
 // newDecider picks the call that fits the model. api is "systemone",
-// "chat" or "auto", which asks Ollama whether the model is a decision
-// model.
+// "chat", "messages" for Claude, or "auto", which asks Ollama whether
+// the model is a decision model.
 func newDecider(ctx context.Context, o ollama, api string) (decider, error) {
 	if api == "auto" {
 		reply, _, err := o.post(ctx, "/api/show", map[string]string{"model": o.model})
@@ -142,6 +185,8 @@ func newDecider(ctx context.Context, o ollama, api string) (decider, error) {
 		return &tev{o}, nil
 	case "chat":
 		return &gemma{o}, nil
+	case "messages":
+		return &claude{o}, nil
 	}
 	return nil, fmt.Errorf("unknown api %q", api)
 }
@@ -181,19 +226,7 @@ func (t *tev) decide(ctx context.Context, p prompt) (decision, error) {
 			"move": {Type: "choice", Instructions: p.instructions, Criteria: criteria},
 		},
 	}
-	// A busy service is asked again after a wait. The wait counts as
-	// latency: the answer is that much older when it arrives.
-	start, retries := time.Now(), 0
-	data, latency, err := t.post(ctx, "/v1/systemone", request)
-	for ; errors.Is(err, errBusy) && retries < t.retries; retries++ {
-		select {
-		case <-ctx.Done():
-			return decision{}, ctx.Err()
-		case <-time.After(t.backoff << retries):
-		}
-		data, _, err = t.post(ctx, "/v1/systemone", request)
-		latency = time.Since(start)
-	}
+	data, latency, retries, err := t.ask(ctx, "/v1/systemone", request)
 	if err != nil {
 		return decision{}, err
 	}
@@ -250,12 +283,17 @@ var moveSchema = map[string]any{
 	"required": []string{"move"},
 }
 
-func (g *gemma) decide(ctx context.Context, p prompt) (decision, error) {
-	content := fmt.Sprintf("State: %s\n\n%s\n- left: %s\n- none: %s\n- right: %s",
+// chatContent is the one user message a general-purpose model gets: the
+// same three parts a decision model takes as separate fields.
+func chatContent(p prompt) string {
+	return fmt.Sprintf("State: %s\n\n%s\n- left: %s\n- none: %s\n- right: %s",
 		p.state, p.instructions, criteria["left"], criteria["none"], criteria["right"])
+}
+
+func (g *gemma) decide(ctx context.Context, p prompt) (decision, error) {
 	data, latency, err := g.post(ctx, "/api/chat", chatRequest{
 		Model:    g.model,
-		Messages: []chatMessage{{Role: "user", Content: content}},
+		Messages: []chatMessage{{Role: "user", Content: chatContent(p)}},
 		Format:   moveSchema,
 	})
 	if err != nil {
@@ -278,4 +316,86 @@ func (g *gemma) decide(ctx context.Context, p prompt) (decision, error) {
 		return decision{latency: latency}, fmt.Errorf("%w: %q", errUnusable, reply.Message.Content)
 	}
 	return decision{action: answer.Move, latency: latency}, nil
+}
+
+// claude asks a general-purpose model on Anthropic's /v1/messages. It is
+// pinned down the way gemma is: temperature 0 and a JSON schema that
+// leaves room for nothing but the move. Haiku does not think unless
+// asked to, so there is nothing to turn off.
+type claude struct{ ollama }
+
+type messagesRequest struct {
+	Model        string        `json:"model"`
+	MaxTokens    int           `json:"max_tokens"`
+	Temperature  float64       `json:"temperature"`
+	Messages     []chatMessage `json:"messages"`
+	OutputConfig outputConfig  `json:"output_config"`
+}
+
+type outputConfig struct {
+	Format outputFormat `json:"format"`
+}
+
+type outputFormat struct {
+	Type   string `json:"type"`
+	Schema any    `json:"schema"`
+}
+
+type messagesReply struct {
+	Content []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	} `json:"content"`
+	StopReason string `json:"stop_reason"`
+	Usage      struct {
+		InputTokens int `json:"input_tokens"`
+	} `json:"usage"`
+}
+
+// claudeSchema is moveSchema closed to further properties, which
+// Anthropic's structured output asks for.
+var claudeSchema = map[string]any{
+	"type":                 moveSchema["type"],
+	"properties":           moveSchema["properties"],
+	"required":             moveSchema["required"],
+	"additionalProperties": false,
+}
+
+// claudeMaxTokens leaves room for the move and nothing else; the reply
+// is about 10 tokens.
+const claudeMaxTokens = 64
+
+func (c *claude) decide(ctx context.Context, p prompt) (decision, error) {
+	data, latency, retries, err := c.ask(ctx, "/v1/messages", messagesRequest{
+		Model:        c.model,
+		MaxTokens:    claudeMaxTokens,
+		Messages:     []chatMessage{{Role: "user", Content: chatContent(p)}},
+		OutputConfig: outputConfig{outputFormat{Type: "json_schema", Schema: claudeSchema}},
+	})
+	if err != nil {
+		return decision{}, err
+	}
+	var reply messagesReply
+	if err := json.Unmarshal(data, &reply); err != nil {
+		return decision{}, fmt.Errorf("%s: %w", c.model, err)
+	}
+	d := decision{latency: latency, retries: retries, tokens: reply.Usage.InputTokens}
+	// A refusal or a reply cut short need not match the schema.
+	var text string
+	for _, block := range reply.Content {
+		if block.Type == "text" {
+			text += block.Text
+		}
+	}
+	var answer struct {
+		Move string `json:"move"`
+	}
+	if err := json.Unmarshal([]byte(text), &answer); err != nil {
+		return d, fmt.Errorf("%w: %s: %q", errUnusable, reply.StopReason, text)
+	}
+	if _, ok := game.ParseAction(answer.Move); !ok {
+		return d, fmt.Errorf("%w: %s: %q", errUnusable, reply.StopReason, text)
+	}
+	d.action = answer.Move
+	return d, nil
 }
