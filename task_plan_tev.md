@@ -29,14 +29,14 @@ No bot code yet. The aim is to know that the digested state makes a model drive 
 
 ### Phase 2: Tracer bullet, one model driving end to end
 The thinnest slice through every layer: game API, prompt builder, Ollama call, input sent, a line in the terminal.
-- [ ] `cmd/llmbot/main.go`: connect to `/ws`, claim under the model name, release on Ctrl-C, stop if someone else takes the car (same manners as `cmd/bot`)
-- [ ] Digested prompt builder only, as chosen in Phase 1; pure function with a unit test
-- [ ] Tev caller only: `POST /v1/systemone`, one `choice` question, plain `net/http`
-- [ ] One call at a time on the newest state; send the chosen action; one warm-up call before driving
-- [ ] Terminal line per decision: tick, action, confidence, latency
-- [ ] Run `tev1:0.8b` on one seed at normal speed with the viewer open
+- [x] `cmd/llmbot/main.go`: connect to `/ws`, claim under the model name, release on Ctrl-C, stop if someone else takes the car (same manners as `cmd/bot`)
+- [x] Digested prompt builder only, as chosen in Phase 1; pure function with a unit test
+- [x] Tev caller only: `POST /v1/systemone`, one `choice` question, plain `net/http`
+- [x] One call at a time on the newest state; send the chosen action; one warm-up call before driving
+- [x] Terminal line per decision: tick, action, confidence, latency
+- [x] Run `tev1:0.8b` on one seed at normal speed with the viewer open
 - [ ] **STOP: show the run to the user and get sign-off before Phase 3.** Confirm the log format and that the digested state is the right shape
-- **Status:** pending
+- **Status:** built and run; waiting for the user's sign-off
 
 ### Phase 3: The comparison harness
 Everything the bot needs so the three models can be put side by side.
@@ -97,7 +97,7 @@ Proposed answers in brackets. Numbers 1 and 2 block Phase 2; the rest can be set
 |----------|-----------|
 | "Memory" means RAM footprint of the loaded model | User's choice; measurable locally |
 | Contenders: `tev1:0.8b`, `tev1:4b`, `gemma4:e2b` | Two Tev sizes separate "decision model vs LLM" from "small vs large" |
-| Hosted Jev is out of scope | Waitlisted; only Tev runs locally |
+| Hosted Jev is out of scope | Waitlisted when this was decided; only Tev runs locally. Access came later on 2026-10-04; adding Jev is a separate later task in `task_plan_jev.md` |
 | Tev is called on `POST /v1/systemone` with `state` and `questions`; `criteria` is a map of option to description | Found by probing Ollama 0.35.1; a list is rejected |
 | Gemma is called on `/api/chat` with a JSON enum `format`, thinking off, temperature 0 | Gemma is rejected on the decision endpoint; this returned a clean answer in about 230 ms |
 | One `choice` question per tick: `left`, `none`, `right` | The question type Tev was trained for; keeps both models answering the same thing |
@@ -128,6 +128,8 @@ Proposed answers in brackets. Numbers 1 and 2 block Phase 2; the rest can be set
 | Digested state as ticks until blocked, keyed by absolute lane (`lane_0` to `lane_3`) or by move | 1 | No better than raw: 0.8b answered `none` on all seven probe states, 4b 3 to 5 of 7 safe, Gemma answered `right` every time on the absolute form. Use words |
 | Word digest as bare JSON (`{"left":"blocked soon",...}`) with a one-line question | 1 | 0.8b still answered `none` nearly always, with confidence under 0.1. A sentence naming the lanes plus an instruction that states the rule fixed it |
 | Latency taken from repeat calls with the same prompt (21 ms and 52 ms) | 1 | Those were cache hits. A prompt not seen before costs about 90 ms (0.8b) and 420 ms (4b) digested, 127 ms and 627 ms raw. Measure on changing states |
+| `tev1:0.8b` driving seed 7 on the digested state at pace 1.0 | 3 runs | Crashed at tick 432 (score 633) every time. Not speed (median 21 ms): it sat in a lane that was `blocked soon` for 55 ticks with the way out on its left and answered `none` at confidence 0.14. A follow-up probe showed it almost never answers `left`, also for `left clear, current blocked soon, right wall`, while the mirror cases get `right`. Open: see Notes |
+| `tev1:4b` driving seed 7 on the digested state at pace 1.0 | 1 run | Drove 1,956 ticks (score 3,789, speed 76), then crashed. Two causes: at that speed three rows fit inside the 60-tick horizon, so every lane read `blocked soon` and the words no longer said which was nearest; and each new sentence cost about 420 ms, so those answers were 12 to 14 ticks old. Open: see Notes |
 | Planned slow-down by scaling the car's speeds (`-speed-scale`) | 1 | Dropped before any code: it makes a different game per scale, scores stop being comparable, the stale threshold breaks and the fairness tests must be rerun. Replaced by `-pace` |
 
 ## Notes
@@ -143,4 +145,6 @@ Proposed answers in brackets. Numbers 1 and 2 block Phase 2; the rest can be set
 - **Latency depends on whether the prompt was seen before** (one model loaded, median ms). Raw, every state new: 0.8b 127, 4b 627, Gemma 485. Digested, sentence new: 0.8b about 90, 4b about 420, Gemma about 360. Digested, sentence seen before: 0.8b 22, 4b 56, Gemma 242. The digested sentence has few distinct values, so most calls while driving should be hits; the raw state changes every tick and never is. So on raw, `tev1:4b` is the slowest of the three (about 19 ticks at pace 1.0)
 - Runner RSS seen during the probe (`llama-server` process): 0.8b 2,911 MB, 4b 9,562 MB, Gemma 5,365 MB. Higher than the first figures for Tev; to be measured properly in Phase 3
 - The probe is a single-tick check. A model that stays in a blocked lane is still "safe" until the last few ticks, so only driving (Phase 2) shows whether it moves in time
+- **Phase 2 run (2026-10-04).** `go run ./cmd/llmbot -model tev1:0.8b -seed 7`. The slice works end to end: warm-up, claim, one question at a time, moves sent, a log line per decision, release on Ctrl-C or after `-runs`. Latency while driving: 0.8b median 21 ms, p95 40 ms; 4b median 51 ms, p95 409 ms (new sentences). After a move is sent the bot asks nothing until the lane changes or 4 ticks pass, as `cmd/bot` does, so one answer cannot move two lanes
+- **Open after Phase 2, for the user's sign-off.** (a) The words do not rank distance: `blocked soon` covers 3 to 59 ticks. Proposal: split it into `blocked soon` and `blocked later` (for example beyond 20 ticks), or shorten the horizon. (b) `tev1:0.8b` avoids `left`. Not yet tried: other option keys or order. It may simply be a finding about the small model
 - Start the game with `go run ./cmd/outrun`, viewer at http://127.0.0.1:8765; Ollama at `localhost:11434`

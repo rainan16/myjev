@@ -22,11 +22,21 @@ Plan: `task_plan_tev.md`. Detailed figures are in its Notes; this file is the ru
 - Runner RSS (`llama-server`): 0.8b 2,911 MB, 4b 9,562 MB, Gemma 5,365 MB during the probe. Higher for Tev than first reported; measure again in Phase 3
 - The sample bot steers early, so states captured from its run rarely have the car in a blocked lane. The probe placed the car in each lane of the captured layouts to get such states
 
+### Phase 2 (tracer bullet, 2026-10-04)
+- The slice works end to end with `tev1:0.8b`: about 28 decisions per second, median 21 ms, answers 0 to 2 ticks old
+- `tev1:0.8b` crashes at tick 432 on seed 7 every run, by judgment and not by speed. It stays in a lane that is `blocked soon` when the way out is on the left. A 15-sentence probe showed it almost never answers `left`, while the mirrored sentences get `right`
+- `tev1:4b` answered all 15 of those sentences correctly and drove 1,956 ticks on seed 7 (score 3,789) before crashing at speed 76
+- At high speed several rows fit in the 60-tick horizon, every lane reads `blocked soon`, and the sentence stops saying which lane is blocked first. The digest needs a way to rank distance
+- A sentence the model has not seen costs `tev1:4b` about 420 ms, which is 12 to 14 ticks at pace 1.0. New sentences appear exactly when the situation changes, so the slow answers come at the worst moment
+- Without a guard, a move that has not landed yet is asked about again and sent twice. The bot waits for the lane to change (or 4 ticks) after sending, as the sample bot does
+
 ## Technical Decisions
 | Decision | Rationale |
 |----------|-----------|
 | Digested state is one sentence of coarse words for left, current and right lane | Best probe result on all three models; numbers and absolute lanes failed |
 | `instructions` and `criteria` are constant; only `state` changes | Keeps repeat prompts on the fast path |
+| After a move is sent, no new question until the lane changes or 4 ticks pass | Same rule as `cmd/bot`; stops one answer becoming two lane changes |
+| `none` is not sent to the server | Nothing to do; keeps the input queue empty |
 | Lane words: `clear`, `blocked soon`, `blocked now`, `wall`, `blocked soon, clear lane beyond` | Thresholds live in the bot: 60-tick horizon, "now" is 2 ticks or less |
 
 ## Issues Encountered

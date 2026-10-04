@@ -8,6 +8,7 @@ An OutRun-style four-lane dodger in Go. One binary runs the game headless and se
 |------|----------|
 | `cmd/outrun` | Server binary: flags, loopback check, wiring |
 | `cmd/bot` | Sample bot, a separate binary |
+| `cmd/llmbot` | Bot that lets a local Ollama model drive; plan in `task_plan_tev.md` |
 | `internal/game` | Headless core: rules (`game.go`), observation (`state.go`), reference solver (`solver.go`) |
 | `internal/server` | HTTP and WebSocket handlers, real-time tick loop, controller arbitration |
 | `web` | Viewer (`index.html`, `viewer.js`), embedded with `go:embed` |
