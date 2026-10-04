@@ -13,7 +13,7 @@ A new bot, `cmd/llmbot`, lets the local Ollama models `tev1:0.8b`, `tev1:4b` and
 This is a hands-on quick look, not a benchmark.
 
 ## Current Phase
-Phase 5 (waiting for approval)
+Phase 6 (walk-through with the user open)
 
 ## Phases
 
@@ -69,16 +69,16 @@ An API change: docs and README move in the same change.
 - [x] Server tests with `tick()` and `httptest`, named after the behaviour; `go test -race ./...`
 - [x] `docs/API.md` and `README.md` updated
 - [x] `llmbot` publishes latency, confidence and state form as status, at a rate that does not flood the socket
-- **Status:** built and run; waiting for the user's approval
+- **Status:** complete (approved 2026-10-04)
 
 ### Phase 6: Quick look and write-up
-- [ ] Pick the seed and the run length (Key Question 7)
-- [ ] For each model in turn, others unloaded with `ollama stop`: `raw` then `digested`, starting at pace 1.0 and stepping down until it survives; note that pace
-- [ ] One pass with `-min-confidence` set, on a Tev model, to see what the gate changes
-- [ ] README section: the Tev call and the Gemma call side by side, the knobs Gemma needed, and the observed numbers with their caveats (one seed, RAM figures across different quantizations)
-- [ ] Move the decisions and failed approaches that matter to the game into `task_plan.md`
+- [x] Pick the seed and the run length (Key Question 7)
+- [x] For each model in turn, others unloaded with `ollama stop`: `raw` then `digested`, starting at pace 1.0 and stepping down until it survives; note that pace
+- [x] One pass with `-min-confidence` set, on a Tev model, to see what the gate changes
+- [x] README section: the Tev call and the Gemma call side by side, the knobs Gemma needed, and the observed numbers with their caveats (one seed, RAM figures across different quantizations)
+- [x] Move the decisions and failed approaches that matter to the game into `task_plan.md`
 - [ ] Walk through the result with the user
-- **Status:** pending
+- **Status:** runs and write-up done; the walk-through with the user is open
 
 ## Key Questions
 Proposed answers in brackets. Numbers 1 and 2 block Phase 2; the rest can be settled in the phase that needs them.
@@ -89,8 +89,8 @@ Proposed answers in brackets. Numbers 1 and 2 block Phase 2; the rest can be set
 4. Settled: the nearest 8. Background: how many obstacles in the raw state? Tev's `num_ctx` is 2050; a state with 2 obstacles used 204 input tokens. [Nearest 8]
 5. Settled: any value above 0 up to 1.0; anything else stops the server at startup
 6. Settled: the state JSON reports `pace`, because the HUD and the viewer's smoothing need it
-7. Which seed and how long is a run? [Seed 7, which the sample bot is known to survive; stop by hand after about 3 minutes]
-8. Is runner process RSS comparable across Tev (Q8) and Gemma (Q4, with a vision projector loaded)? [Report it with that caveat]
+7. Settled: seed 7; a run counts as survived at tick 2,700, the end of the speed ramp, so the bar is the same at every pace
+8. Settled: reported with that caveat, and measured on a freshly loaded runner with nothing else loaded, because a runner grows while it works and the bot's summary adds up every runner it finds
 
 ## Decisions Made
 | Decision | Rationale |
@@ -146,6 +146,8 @@ Proposed answers in brackets. Numbers 1 and 2 block Phase 2; the rest can be set
 | Other option keys, key order, sentence order and question forms to get `tev1:0.8b` to answer `left` | 13 variants on 140 sentences | `left` 0 of 29 in every one; with `right` mentioned first it stopped answering `right` as well. Recorded as a finding about the small model, not pursued |
 | Asking all 140 sentences in warm-up so none is new while driving | 1 run per model | Works for `tev1:0.8b` (changes answered in 23 to 41 ms). Does not work for `tev1:4b`: a sentence that differs from the previous call still costs 420 to 500 ms although it was asked in warm-up, and warm-up takes 68 s. Gemma 57 s, no gain seen. Only the immediately repeated prompt is fast on 4b |
 | `blocked later` plus the longer instruction, seed 7, pace 1.0 | 1 run per model | No better. `tev1:0.8b` crashed at tick 311 with no move sent at all (before: tick 432, one move). `tev1:4b` crashed at tick 386: it left a `blocked later` lane for a `blocked soon, clear lane beyond` one, and the answer to the next, new sentence was too old. Gemma crashed at tick 311 with every answer stale (7 to 9 ticks) |
+| Runner memory read from the bot's run summaries | 19 runs | Not usable: 5.1 to 10.6 GB for `tev1:0.8b` alone. Another model was still unloading in some runs and a runner grows while it works. Measured separately on a freshly loaded runner (1.0, 4.7 and 5.0 GB); the summary now says how many runners it added up |
+| `tev1:4b`, digested, pace 1.0 in the quick look: the bot claimed the car and never played | 1 | A race in how the bot recognised its own run; see `task_plan.md`. Fixed in `cmd/llmbot`, the run was repeated |
 | Planned slow-down by scaling the car's speeds (`-speed-scale`) | 1 | Dropped before any code: it makes a different game per scale, scores stop being comparable, the stale threshold breaks and the fairness tests must be rerun. Replaced by `-pace` |
 
 ## Notes
@@ -166,4 +168,5 @@ Proposed answers in brackets. Numbers 1 and 2 block Phase 2; the rest can be set
 - **Phase 3 runs (2026-10-04, seed 7, pace 1.0, digested).** `tev1:0.8b`: 311 ticks, 3 rows, 29.6 decisions per second, median 21 ms, p95 34 ms, 0 stale. `tev1:4b`: 386 ticks, 4 rows, 14.0 per second, median 52 ms, p95 78 ms, 4% stale. `gemma4:e2b`: 311 ticks, 3 rows, 4.0 per second, median 248 ms, 100% stale. Runner memory printed: 5,746, 8,294 and 5,569 MB; the first is suspect, since another model was probably still unloading. The summary adds up all runner processes
 - **After Phase 3:** the user chose to go back to the Phase 2 wording, which is what the code now has (72 possible sentences). Still open from Phase 2: the words do not rank distance, which is what `tev1:4b` ran into at speed 76. Gemma needs the pace of Phase 4 before anything can be said about its judgment
 - **Phase 4 check (2026-10-04).** `-pace 0.25` gave 7.5 ticks per second measured over 4 s; 0, 1.5 and -1 are refused at startup. `gemma4:e2b` at pace 0.25 on seed 7, digested: 1,347 ticks, 23 rows passed, score 2,356, median 248 ms, answers 1 to 3 ticks old, 0 stale. At pace 1.0 it was 311 ticks with every answer stale. The viewer change (smoothing and `pace` on the HUD) was not looked at in a browser by the agent
+- **Phase 6 quick look (2026-10-04).** Seed 7, one run per cell, ticks survived at pace 1.0 / 0.5 / 0.25. `tev1:0.8b` raw 311 / 311 / 311, digested 432 / 432 / 432. `tev1:4b` raw 311 / 311 / 704, digested 1,926 / 836 / survived (2,700). `gemma4:e2b` raw 311 / 246 / 247, digested 311 / 1,347 / 1,347. `tev1:4b` digested at 0.25 with `-min-confidence 0.5`: 1,926, 10 moves held back. Full table and reading in the README. Single runs; the same setup varies a lot from run to run
 - Start the game with `go run ./cmd/outrun`, viewer at http://127.0.0.1:8765; Ollama at `localhost:11434`

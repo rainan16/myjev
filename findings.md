@@ -43,6 +43,15 @@ Plan: `task_plan_tev.md`. Detailed figures are in its Notes; this file is the ru
 - The pace does what it was meant to: Gemma, which never steered at pace 1.0, drove 1,347 ticks and passed 23 rows at pace 0.25 with no stale answer. Its crash there was judgment: it moved left into a lane that was `blocked soon` with no clear lane beyond
 - The same seed and inputs give the same state after 400 ticks at pace 0.25 and 1.0 (test), so scores compare across paces
 
+### Phase 6 (quick look, 2026-10-04)
+- Only `tev1:4b` on the digested state at pace 0.25 survived the whole speed ramp
+- The pace separates "too slow" from "wrong judgment": `tev1:0.8b` crashes at the same tick at every pace, Gemma goes from never steering at 1.0 to 23 rows at 0.5
+- Lower pace is not always better in a single run: `tev1:4b` digested got 1,926 ticks at 1.0 and 836 at 0.5. Outcomes depend on which tick an answer lands on
+- On the raw state `tev1:4b` is the slowest (about 555 ms), Gemma next (415 ms), `tev1:0.8b` 115 ms; none of them steers well on it at any pace
+- The confidence gate at 0.5 held back 10 moves of `tev1:4b` and that run crashed where the ungated one survived. One run each, so no more than a hint
+- Memory, freshly loaded and alone: `tev1:0.8b` about 1.0 GB, `tev1:4b` about 4.7 GB, Gemma about 5.0 GB. A runner grows while it works (4b: 6.9 GB after a run). `/api/ps` says 852, 4,468 and 364 MB
+- A bot must not take the first state it receives as the run before its own; the greeting state can be dropped for a slow connection
+
 ## Technical Decisions
 | Decision | Rationale |
 |----------|-----------|

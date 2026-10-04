@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/coder/websocket"
 
 	"myjev/internal/game"
 )
@@ -335,21 +338,24 @@ func TestSummaryReportsRateLatencyAndStaleShare(t *testing.T) {
 	st.unusable = 2
 	s := state{RunID: 3, Pace: 0.5}
 	s.Tick, s.Score, s.Speed = 600, 900, 51
-	got := st.summary(s, true, 10*time.Second, 2911)
+	got := st.summary(s, true, 10*time.Second, runnerMemory{2911, 1})
 	for _, want := range []string{
 		"run 3 crashed at pace 0.5: 600 ticks, 0 rows passed, score 900 (speed 51)",
 		"decisions  20, 2.0 per second",
 		"median 110 ms, p95 200 ms",
 		"3 moves sent, 12 stay, 5 stale (25%)",
 		"2 unusable",
-		"2911 MB",
+		"2911 MB in Ollama's model runner",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("summary lacks %q:\n%s", want, got)
 		}
 	}
-	if got := (&stats{}).summary(state{}, false, 0, -1); !strings.Contains(got, "stopped") || !strings.Contains(got, "could not read") {
+	if got := (&stats{}).summary(state{}, false, 0, runnerMemory{}); !strings.Contains(got, "stopped") || !strings.Contains(got, "could not read") {
 		t.Errorf("empty summary:\n%s", got)
+	}
+	if got := st.summary(s, true, time.Second, runnerMemory{9000, 2}); !strings.Contains(got, "9000 MB in 2 model runners") {
+		t.Errorf("summary with two models loaded:\n%s", got)
 	}
 }
 
@@ -368,10 +374,86 @@ func TestRunnerMemoryIsReadFromTheRunnerProcess(t *testing.T) {
 5327392 /opt/homebrew/Cellar/ollama/0.35.1_1/libexec/lib/ollama/llama-server --model /Users/x/.ollama/models/blobs/sha256-6dd7 --port 51234
    1024 /usr/bin/some-editor llama-notes.txt
 `
-	if got := parseRunnerRSS(ps); got != 5327392/1024 {
-		t.Errorf("rss = %d MB", got)
+	if got := parseRunnerRSS(ps); got != (runnerMemory{5327392 / 1024, 1}) {
+		t.Errorf("rss = %+v", got)
 	}
-	if got := parseRunnerRSS("  41152 ollama serve\n"); got != -1 {
-		t.Errorf("no runner: rss = %d", got)
+	if got := parseRunnerRSS(ps + "1048576 /opt/ollama/llama-server --model other\n"); got != (runnerMemory{5327392/1024 + 1024, 2}) {
+		t.Errorf("two runners: rss = %+v", got)
 	}
+	if got := parseRunnerRSS("  41152 ollama serve\n"); got.processes != 0 {
+		t.Errorf("no runner: rss = %+v", got)
+	}
+}
+
+// asked is a model that reports each question it gets and always stays.
+type asked chan prompt
+
+func (a asked) decide(ctx context.Context, p prompt) (decision, error) {
+	select {
+	case a <- p:
+	case <-ctx.Done():
+	}
+	return decision{action: "none"}, nil
+}
+
+func TestBotResetsOnceItIsShownDrivingAndPlaysTheNextRun(t *testing.T) {
+	// The first state this server sends already has the bot driving, as
+	// happens when a slow connection misses the state it is greeted
+	// with. The bot must take that run as not its own, reset, and play
+	// the run after it.
+	problem := make(chan string, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.CloseNow()
+		ctx := r.Context()
+		expect := func(want string) bool {
+			var m struct {
+				Type string `json:"type"`
+			}
+			_, data, err := conn.Read(ctx)
+			if err != nil {
+				return false
+			}
+			if json.Unmarshal(data, &m); m.Type != want {
+				problem <- "got " + string(data) + ", want a " + want
+				return false
+			}
+			return true
+		}
+		show := func(run, tick int) {
+			conn.Write(ctx, websocket.MessageText, fmt.Appendf(nil,
+				`{"type":"state","state":{"run_id":%d,"tick":%d,"controller":"driver","tick_rate":30,"lanes":4,"lane":2,"car_length":4,"speed":40,"pace":1}}`, run, tick))
+		}
+		if !expect("claim") {
+			return
+		}
+		show(5, 80)
+		if !expect("reset") {
+			return
+		}
+		show(6, 0)
+		conn.Read(ctx) // hold the connection until the bot leaves
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	model := make(asked)
+	b := &bot{name: "driver", seed: -1, maxStale: 6, build: digested, form: "digested", model: model}
+	done := make(chan error, 1)
+	go func() { done <- b.play(ctx, "ws"+strings.TrimPrefix(srv.URL, "http")) }()
+
+	<-model // warm-up
+	select {
+	case <-model: // a question about the run the reset started
+	case msg := <-problem:
+		t.Fatal(msg)
+	case err := <-done:
+		t.Fatalf("the bot stopped before asking anything: %v", err)
+	}
+	cancel()
+	<-done
 }

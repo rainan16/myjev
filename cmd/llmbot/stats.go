@@ -100,9 +100,8 @@ func (st *stats) percentile(p int) time.Duration {
 	return sorted[min(len(sorted)*p/100, len(sorted)-1)]
 }
 
-// summary is printed at the end of a run. rssMB below zero means the
-// runner's memory could not be read.
-func (st *stats) summary(s state, crashed bool, elapsed time.Duration, rssMB int) string {
+// summary is printed at the end of a run.
+func (st *stats) summary(s state, crashed bool, elapsed time.Duration, mem runnerMemory) string {
 	end := "stopped"
 	if crashed {
 		end = "crashed"
@@ -122,30 +121,40 @@ func (st *stats) summary(s state, crashed bool, elapsed time.Duration, rssMB int
 	fmt.Fprintf(&b, "  latency    median %d ms, p95 %d ms\n", st.percentile(50).Milliseconds(), st.percentile(95).Milliseconds())
 	fmt.Fprintf(&b, "  answers    %d moves sent, %d stay, %d stale (%.0f%%), %d below confidence, %d after a lane change, %d unusable\n",
 		st.outcomes[sent], st.outcomes[stayed], st.outcomes[stale], staleShare, st.outcomes[gated], st.outcomes[laneChanged], st.unusable)
-	if rssMB >= 0 {
-		fmt.Fprintf(&b, "  memory     %d MB in Ollama's model runner", rssMB)
-	} else {
+	switch mem.processes {
+	case 0:
 		b.WriteString("  memory     could not read Ollama's model runner")
+	case 1:
+		fmt.Fprintf(&b, "  memory     %d MB in Ollama's model runner", mem.mb)
+	default:
+		// Another model is still loaded, so the figure is not this model's.
+		fmt.Fprintf(&b, "  memory     %d MB in %d model runners; unload the other models for a figure for this one", mem.mb, mem.processes)
 	}
 	return b.String()
 }
 
-// runnerRSS reads the memory of Ollama's model runner processes in MB,
-// or -1 if there is none. /api/ps is not used: it reports far less than
-// the process holds.
-func runnerRSS() int {
+// runnerMemory is the resident memory of Ollama's model runner
+// processes. Each loaded model has its own runner.
+type runnerMemory struct {
+	mb        int
+	processes int
+}
+
+// runnerRSS reads the memory of Ollama's model runners. /api/ps is not
+// used: it reports far less than the process holds.
+func runnerRSS() runnerMemory {
 	out, err := exec.Command("ps", "-axo", "rss=,command=").Output()
 	if err != nil {
-		return -1
+		return runnerMemory{}
 	}
 	return parseRunnerRSS(string(out))
 }
 
-// parseRunnerRSS sums the resident memory of the runner processes in the
-// output of `ps -axo rss=,command=`. With models run one at a time there
-// is one.
-func parseRunnerRSS(ps string) int {
-	kb, found := 0, false
+// parseRunnerRSS adds up the runner processes in the output of
+// `ps -axo rss=,command=`.
+func parseRunnerRSS(ps string) runnerMemory {
+	var mem runnerMemory
+	kb := 0
 	for line := range strings.Lines(ps) {
 		rss, command, ok := strings.Cut(strings.TrimSpace(line), " ")
 		if !ok || !(strings.Contains(command, "llama-server") || strings.Contains(command, "ollama runner")) {
@@ -153,11 +162,9 @@ func parseRunnerRSS(ps string) int {
 		}
 		if n, err := strconv.Atoi(rss); err == nil {
 			kb += n
-			found = true
+			mem.processes++
 		}
 	}
-	if !found {
-		return -1
-	}
-	return kb / 1024
+	mem.mb = kb / 1024
+	return mem
 }

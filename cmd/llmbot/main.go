@@ -124,9 +124,6 @@ func (b *bot) play(ctx context.Context, url string) error {
 	if err := b.send(ctx, map[string]any{"type": "claim", "name": b.name}); err != nil {
 		return err
 	}
-	if err := b.reset(ctx); err != nil {
-		return err
-	}
 
 	err = b.loop(ctx)
 	switch {
@@ -208,9 +205,11 @@ func (b *bot) loop(ctx context.Context) error {
 	}()
 
 	var (
-		// The server greets every connection with the state of the run
-		// that was already there. That run is not ours; wait for the one
-		// our reset starts.
+		// The run that is going when the car becomes ours is not ours.
+		// We reset once the server shows us driving and play from the
+		// run after that one. Going by the first state received instead
+		// is not safe: a slow connection may never see the state the
+		// server greets it with.
 		inherited = -1
 		latest    state
 		run       int
@@ -317,9 +316,6 @@ func (b *bot) loop(ctx context.Context) error {
 				continue
 			}
 			s := m.State
-			if inherited < 0 {
-				inherited = s.RunID
-			}
 			if s.Controller != b.name {
 				if b.driving {
 					return errTakenOver
@@ -327,6 +323,12 @@ func (b *bot) loop(ctx context.Context) error {
 				continue // our claim has not been processed yet
 			}
 			b.driving = true
+			if inherited < 0 {
+				inherited = s.RunID
+				if err := b.reset(ctx); err != nil {
+					return err
+				}
+			}
 			if s.RunID <= inherited {
 				continue
 			}

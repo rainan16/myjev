@@ -112,6 +112,10 @@ Proposed defaults are in brackets. Confirm or change them in Phase 1.
 | 4 discrete lanes, key press = one lane change | Simple and easy for bots; user's explicit choice over continuous steering |
 | WebSocket stream + HTTP endpoints | Real-time push for bots and viewer, curl-friendly for poking |
 | Real-time tick loop only, no step mode | User's choice; accepted that bot latency affects outcomes |
+| The game's clock can be slowed with `-pace` (above 0 up to 1); the core, the speeds and the spacing are untouched, and the state reports `pace` | 2026-10-04, from the Tev and Gemma task. Every driver plays the same game tick for tick, so scores compare across paces. Scaling the car's speeds instead was rejected: it makes a different game per scale and the fairness tests would have to be rerun |
+| The pace is fixed for the life of the server | A run's numbers belong to one pace |
+| The controller can publish one line of free text (`status` message, `POST /control/status`, `controller_status` in the state); the server does not interpret it; cleared when the controller changes, kept across a reset | 2026-10-04. Lets a bot show what it is doing in the HUD without putting any bot's vocabulary into the API |
+| Setting a status does not broadcast; it goes out with the next tick | A chatty driver cannot flood the viewers |
 | One active controller, switchable via API | Human and bot never fight over the car |
 | State = structured objects plus lookahead lane grid | Usable by both simple and smarter bots |
 | Action = left / right / none | Bot plays exactly the game a human plays |
@@ -154,6 +158,7 @@ Proposed defaults are in brackets. Confirm or change them in Phase 1.
 | `git commit` refused: "Git commits are disabled by the demo policy plugin" | 1 | Not worked around; it is a deliberate policy in the user's Claude Code setup. User was given the command to run themselves. Retry only if the user says the policy is off |
 | Lookahead solver waited until the last possible tick to move (any path that survived counted as equally good), so the bot crashed as soon as a row needed several lane changes | 1 | First tie-break (prefer the neighbouring lane that stays clear longer) was still short-sighted. Fix: head for the lane that stays clear longest overall, as long as the step costs no survival time |
 | Bot counted the already-crashed run it found on connecting as its own first run | 1 | Bot ignores the run that existed before its reset |
+| A bot that takes the first state it receives as "the run before mine" can hang: the server keeps only the newest state for a slow connection, so the greeting state may be replaced by one from after the bot's own reset. Seen once with `cmd/llmbot` (claimed the car, then never played) | 1 | `cmd/llmbot` now resets only after a state shows it driving and plays the run after that. `cmd/bot` still uses the old way and can hit the same race; not changed yet |
 | Greedy reference solver (head for the lane that stays clear longest) crashed on some seeds: it steered through lanes that were about to be blocked | 1 | Not a spawner fault. Replaced with a lookahead search (`internal/game/solver.go`); all 200 seeds pass |
 | Still crashed on an invisible barrier (state showed `ahead: -6`, length 1, no overlap with the car). First fix was incomplete | 2 | Real cause: the collision sweep started at the previous tick's rear edge, so a lane change hit a barrier up to one tick behind the car. Sweep now covers only the car's current body. The first regression test steered in one tick too late to catch it; it now steers on the exact tick, across 20 seeds |
 

@@ -51,7 +51,7 @@ Plan: `task_plan_tev.md`. Branch: `tev-vs-gemma`.
   - `cmd/llmbot/main.go`, `cmd/llmbot/stats.go`, `cmd/llmbot/llmbot_test.go` (pace in the summary)
 
 ### Phase 5: Status text in the HUD
-- **Status:** built and run, waiting for the user's approval
+- **Status:** complete, approved by the user
 - **Started:** 2026-10-04
 - Actions taken:
   - `status` WebSocket message, `POST /control/status`, `controller_status` in the state, cleared on any change of controller
@@ -59,6 +59,18 @@ Plan: `task_plan_tev.md`. Branch: `tev-vs-gemma`.
 - Files created/modified:
   - `internal/server/server.go`, `internal/server/server_test.go`, `web/viewer.js`, `docs/API.md`, `README.md`
   - `cmd/llmbot/main.go`, `cmd/llmbot/llmbot_test.go`
+
+### Phase 6: Quick look and write-up
+- **Status:** runs and write-up done, walk-through with the user open
+- **Started:** 2026-10-04
+- Actions taken:
+  - 19 runs on seed 7: three models, raw and digested, pace 1.0, 0.5 and 0.25, plus one gated run
+  - Measured runner memory separately on freshly loaded models
+  - Fixed a race in how `llmbot` recognises its own run; the summary now counts the runners it adds up
+  - README section, decisions and errors moved into `task_plan.md`
+- Files created/modified:
+  - `README.md`, `task_plan.md`, `task_plan_tev.md`, `findings.md`, `progress.md`
+  - `cmd/llmbot/main.go`, `cmd/llmbot/stats.go`, `cmd/llmbot/llmbot_test.go`
 
 ## Test Results
 | Test | Input | Expected | Actual | Status |
@@ -77,6 +89,8 @@ Plan: `task_plan_tev.md`. Branch: `tev-vs-gemma`.
 | Bad `-pace` | 0, 1.5, -1 | refused at startup | refused | pass |
 | Gemma drives at pace 0.25 | seed 7, digested | answers arrive in time | 1,347 ticks, 23 rows, 0 stale | pass |
 | Viewer at low pace | browser | smooth motion, pace on HUD | not looked at by the agent | open: user to check |
+| `go test -race ./...`, `go vet ./...`, `gofmt -l .` | after Phase 6 | pass | pass | pass |
+| Quick look | 19 runs, seed 7 | a pace at which each model survives | only `tev1:4b` digested at 0.25 survived | done; see README |
 | Raw probe, all three | 7 states | survivable move | `none` every time, 4 of 7 | fails, as expected |
 
 ## Error Log
@@ -89,8 +103,8 @@ Plan: `task_plan_tev.md`. Branch: `tev-vs-gemma`.
 ## 5-Question Reboot Check
 | Question | Answer |
 |----------|--------|
-| Where am I? | Phase 5 built, waiting for approval |
-| Where am I going? | 6 quick look and write-up |
+| Where am I? | Phase 6 done except the walk-through with the user |
+| Where am I going? | Nothing left in this plan; `task_plan_jev.md` is a separate follow-up |
 | What's the goal? | `cmd/llmbot` lets Tev and Gemma drive so speed, RAM and harness can be compared |
 | What have I learned? | See findings.md |
 | What have I done? | See above |

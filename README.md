@@ -56,6 +56,103 @@ The viewer shows `DRIVER gobot` and the car steers itself. After a crash the bot
 | `-runs` | 0 | Stop after this many runs (0 = keep playing) |
 | `-pause` | `2s` | Wait after a crash before restarting |
 
+## Let a local model drive
+
+`cmd/llmbot` hands the wheel to a model running in [Ollama](https://ollama.com). It was written to see, hands-on, how a decision model (Tev, `tev1:0.8b` and `tev1:4b`) and a general-purpose LLM (`gemma4:e2b`) differ when a decision is needed 30 times a second. It is a quick look, not a benchmark.
+
+With the server and Ollama running:
+
+```sh
+go run ./cmd/llmbot -model tev1:4b -seed 7
+```
+
+The game does not wait for the model. One question is open at a time, always about the newest state, and an answer that arrives too late is dropped. The viewer shows the model's name as the driver and, under it, how long the last answer took and how sure the model was. To give a slow model a chance, slow the game's clock instead: `go run ./cmd/outrun -pace 0.25`.
+
+| Flag | Default | Meaning |
+|------|---------|---------|
+| `-model` | `tev1:0.8b` | Model that drives |
+| `-state` | `digested` | What the model is shown: `digested` or `raw` (see below) |
+| `-max-stale` | 6 | Drop answers older than this many ticks (-1 keeps all) |
+| `-min-confidence` | 0 | Send no move the model is less sure of than this. Only decision models report a confidence |
+| `-api` | `auto` | `systemone` or `chat`; `auto` asks Ollama whether the model is a decision model |
+| `-warm` | off | Ask every digested state once before driving |
+| `-v` | off | Log every decision, not only the changes |
+| `-ollama` | `http://127.0.0.1:11434` | Base URL of Ollama |
+| `-addr`, `-name`, `-seed`, `-runs`, `-pause` | | As for the sample bot; the name defaults to the model name |
+
+At the end of each run it prints ticks survived, rows passed, score, decisions per second, latency, how many answers were dropped as stale, and the memory of Ollama's model runner.
+
+### Two ways to ask
+
+A decision model takes a state and a typed question and returns one of the options with probabilities. There is nothing to parse:
+
+```sh
+curl -s localhost:11434/v1/systemone -d '{
+  "model": "tev1:4b",
+  "state": "Lane to the left: blocked soon. Current lane: clear. Lane to the right: wall.",
+  "questions": {"move": {
+    "type": "choice",
+    "instructions": "Which move keeps the car on a clear lane? Stay if the current lane is clear. Otherwise move to a clear lane, or towards a clear lane beyond.",
+    "criteria": {
+      "left": "move one lane to the left",
+      "none": "stay in the current lane",
+      "right": "move one lane to the right"}}}
+}'
+# {"answers": {"move": {"choice": "none", "probabilities": {...}, "confidence": 0.98}}}
+```
+
+A general-purpose model answers in text, so the harness has to pin it down to a move:
+
+```sh
+curl -s localhost:11434/api/chat -d '{
+  "model": "gemma4:e2b",
+  "stream": false,
+  "think": false,
+  "options": {"temperature": 0},
+  "format": {"type": "object", "required": ["move"],
+    "properties": {"move": {"type": "string", "enum": ["left", "none", "right"]}}},
+  "messages": [{"role": "user", "content": "State: Lane to the left: blocked soon. Current lane: clear. Lane to the right: wall.\n\nWhich move keeps the car on a clear lane? ...\n- left: move one lane to the left\n- none: stay in the current lane\n- right: move one lane to the right"}]
+}'
+# {"message": {"content": "{\"move\": \"none\"}"}}
+```
+
+What Gemma needed and Tev did not: thinking switched off (out of the box one answer took about 15 seconds and came as a paragraph), temperature 0, a JSON schema with the three moves as an enum, and a parser for the reply. Asking for a single token instead returned an empty string. In return Gemma gives no confidence. Each model works only on its own endpoint: Tev called on `/api/chat` thought for 21 seconds and returned nothing, and Gemma is refused on `/v1/systemone`.
+
+### The model judges, the harness calculates
+
+`-state raw` gives the model the car's lane and speed and the nearest eight obstacles with lane, distance and speed. Working out which lane is blocked when takes arithmetic, and none of the three models did it: on seven probe states all three answered `none` every time.
+
+`-state digested` does the arithmetic in Go and gives the model one sentence about the lane each move leads to, such as `Lane to the left: blocked soon. Current lane: clear. Lane to the right: wall.` The words are `clear`, `blocked soon`, `blocked now`, `wall`, and `blocked soon, clear lane beyond`. Numbers (ticks until blocked) worked no better than the raw state; words did.
+
+### What was seen
+
+One run per cell on seed 7, on an M2 Pro with 32 GB, each model loaded alone. A cell shows the ticks survived; 2,700 ticks is the whole speed ramp and counts as surviving. The first row fills lane 2, where the car starts, at tick 311.
+
+| Model | State | Pace 1.0 | Pace 0.5 | Pace 0.25 | Median latency |
+|-------|-------|----------|----------|-----------|----------------|
+| `tev1:0.8b` | raw | 311 | 311 | 311 | 115 ms |
+| `tev1:0.8b` | digested | 432 | 432 | 432 | 20 ms |
+| `tev1:4b` | raw | 311, all answers stale | 311, 95% stale | 704 | 555 ms |
+| `tev1:4b` | digested | 1,926 | 836 | survived | 50 ms, 410 ms when the sentence changes |
+| `gemma4:e2b` | raw | 311, all answers stale | 246 | 247 | 415 ms |
+| `gemma4:e2b` | digested | 311, all answers stale | 1,347 | 1,347 | 236 ms |
+
+| Model | Memory of the model runner, freshly loaded | What `/api/ps` reports |
+|-------|-------------------------------------------|------------------------|
+| `tev1:0.8b` (Q8) | about 1.0 GB | 852 MB |
+| `tev1:4b` (Q8) | about 4.7 GB | 4,468 MB |
+| `gemma4:e2b` (Q4, with a vision projector) | about 5.0 GB | 364 MB |
+
+What that shows:
+
+- **The digested state is what makes a model drive.** On the raw state nobody got past the first few rows at any pace.
+- **Speed and judgment are separate.** `tev1:0.8b` is the only model fast enough for every tick, and it crashes at the same tick at every pace: it almost never answers `left`, whatever the wording or the order of the options. Slowing the clock does not help a model that judges wrongly.
+- **Gemma is too slow at full pace and steers at half pace.** At pace 1.0 every answer was 7 to 9 ticks old and was dropped, so it never steered. At 0.5 and 0.25 it passed 23 rows and crashed in the same place both times, on a wrong move.
+- **`tev1:4b` judges best but is not uniformly fast.** It answers in about 50 ms when the prompt equals the previous one and in about 410 ms when it differs, and the sentence differs exactly when the situation changes. On the raw state, which changes every tick, it is the slowest of the three. It survived the whole ramp only at pace 0.25.
+- **Confidence is informative.** For `tev1:0.8b` the median confidence was 0.55 on good answers and 0.20 on bad ones. One run of `tev1:4b` at pace 0.25 with `-min-confidence 0.5` held back 10 moves and crashed at tick 1,926, where the ungated run survived. Staying in lane is not a safe fallback in this game, so a gate can turn a doubtful move into a crash by inaction.
+
+How far to trust it: every cell is a single run. The same model, seed and pace gave different results on different runs (`tev1:4b`, digested, pace 1.0: 387, 1,926 and 1,956 ticks), because the outcome depends on which tick an answer happens to land on. That is also why pace 0.5 looks worse than pace 1.0 for `tev1:4b`. Latency and memory are the dependable numbers. The memory figures compare different quantizations, and a runner grows while it works: `tev1:4b` stood at 6.9 GB after a run.
+
 ## Write your own bot
 
 The full contract is in [docs/API.md](docs/API.md). The short version:
