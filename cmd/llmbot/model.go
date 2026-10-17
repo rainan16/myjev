@@ -22,9 +22,18 @@ type decision struct {
 	hasConfidence bool
 	confidence    float64
 	probability   float64 // of the chosen action
-	latency       time.Duration
-	retries       int // times the call was repeated because the service was busy
-	tokens        int // input tokens the service counted, where it reports them
+	// choices holds one answer per variant of a fan-out prompt, in the
+	// order of the prompt; the bot picks one when the answer's age is known.
+	choices []choice
+	latency time.Duration
+	retries int // times the call was repeated because the service was busy
+	tokens  int // input tokens the service counted, where it reports them
+}
+
+// choice is one answer to one variant of a fan-out prompt.
+type choice struct {
+	action                  string
+	confidence, probability float64
 }
 
 // decider is a model that picks a move. The two kinds of model need
@@ -197,7 +206,7 @@ type tev struct{ ollama }
 
 type systemoneRequest struct {
 	Model     string                       `json:"model"`
-	State     string                       `json:"state"`
+	State     any                          `json:"state"`
 	Questions map[string]systemoneQuestion `json:"questions"`
 }
 
@@ -226,6 +235,14 @@ func (t *tev) decide(ctx context.Context, p prompt) (decision, error) {
 			"move": {Type: "choice", Instructions: p.instructions, Criteria: criteria},
 		},
 	}
+	if len(p.variants) > 0 {
+		// A JSON object, so that the questions can point into it.
+		request.State = json.RawMessage(p.state)
+		request.Questions = map[string]systemoneQuestion{}
+		for _, v := range p.variants {
+			request.Questions[v.id] = systemoneQuestion{Type: "choice", Instructions: variantInstructions(v), Criteria: criteria}
+		}
+	}
 	data, latency, retries, err := t.ask(ctx, "/v1/systemone", request)
 	if err != nil {
 		return decision{}, err
@@ -233,6 +250,17 @@ func (t *tev) decide(ctx context.Context, p prompt) (decision, error) {
 	var reply systemoneReply
 	if err := json.Unmarshal(data, &reply); err != nil {
 		return decision{}, fmt.Errorf("%s: %w", t.model, err)
+	}
+	if len(p.variants) > 0 {
+		d := decision{hasConfidence: true, latency: latency, retries: retries, tokens: reply.Usage.InputTokens}
+		for _, v := range p.variants {
+			a, ok := reply.Answers[v.id]
+			if _, valid := game.ParseAction(a.Choice); !ok || !valid {
+				return decision{}, fmt.Errorf("%s: no usable answer for %s", t.model, v.id)
+			}
+			d.choices = append(d.choices, choice{a.Choice, a.Confidence, a.Probabilities[a.Choice]})
+		}
+		return d, nil
 	}
 	move, ok := reply.Answers["move"]
 	if !ok {

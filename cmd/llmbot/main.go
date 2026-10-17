@@ -16,6 +16,8 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -47,6 +49,7 @@ func main() {
 	form := flag.String("state", "digested", "state given to the model: digested or raw")
 	maxStale := flag.Int("max-stale", 6, "count answers older than this many ticks as late (-1 = none); a late move is still sent if its lane has not got worse")
 	lookAhead := flag.Int("look-ahead", -1, "ticks ahead of now the digested state describes (-1 = as many as the model's answers are old, 0 = off)")
+	leadList := flag.String("leads", "", "ask about the road at several moments ahead in one call, for example 5,8,11 ticks, and use the answer nearest the real age (digested state on a decision model only; replaces -look-ahead)")
 	questions := flag.Int("questions", 1, "questions open at a time; above 1 they are spread over the time one answer takes, and each is one more call to the model")
 	minConfidence := flag.Float64("min-confidence", 0, "send no move the model is less sure of than this (0 = off)")
 	warm := flag.Bool("warm", false, "ask every digested state once before driving; only helps a model that stays fast on any prompt it has seen")
@@ -96,9 +99,20 @@ func main() {
 		form:          *form,
 		hosted:        *backend != "ollama",
 	}
+	leads, err := parseLeads(*leadList)
+	if err != nil {
+		log.Fatalf("llmbot: %v", err)
+	}
+	if len(leads) > 0 && *form != "digested" {
+		log.Fatalf("llmbot: -leads needs the digested state")
+	}
 	switch *form {
 	case "digested":
 		b.build, b.predicts = digested, true
+		if len(leads) > 0 {
+			b.leads, b.predicts = leads, false
+			b.build = func(s game.State, reaction, _ int) prompt { return fanOut(s, leads, reaction) }
+		}
 	case "raw":
 		b.build, b.warm = raw, false
 	default:
@@ -108,15 +122,31 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
-	var err error
 	b.model, err = newDecider(ctx, conn, *api)
 	if err != nil {
 		log.Fatalf("llmbot: %v", err)
+	}
+	if _, ok := b.model.(*tev); len(leads) > 0 && !ok {
+		log.Fatalf("llmbot: -leads needs a decision model, and %s is not one", *model)
 	}
 	log.Printf("llmbot: %s, %s state", *model, *form)
 	if err := b.play(ctx, "ws://"+*addr+"/ws"); err != nil {
 		log.Fatalf("llmbot: %v", err)
 	}
+}
+
+// parseLeads reads -leads: whole ticks, each once, nearest first.
+func parseLeads(list string) ([]int, error) {
+	var leads []int
+	for _, field := range strings.FieldsFunc(list, func(r rune) bool { return r == ',' || r == ' ' }) {
+		n, err := strconv.Atoi(field)
+		if err != nil || n < 0 || slices.Contains(leads, n) {
+			return nil, fmt.Errorf("-leads: %q is not a new, whole number of ticks", field)
+		}
+		leads = append(leads, n)
+	}
+	slices.Sort(leads)
+	return leads, nil
 }
 
 // The variables that hold the key for hosted Jev and for Claude.
@@ -167,9 +197,10 @@ type bot struct {
 	seed          int64
 	pause         time.Duration
 	maxStale      int
-	lookAhead     int  // ticks the state is moved ahead; below zero follows the model
-	questions     int  // questions open at a time; below 1 counts as 1
-	predicts      bool // the state form can be moved ahead (digested only)
+	lookAhead     int   // ticks the state is moved ahead; below zero follows the model
+	questions     int   // questions open at a time; below 1 counts as 1
+	leads         []int // premises of a fan-out, ticks ahead; none = ask one question
+	predicts      bool  // the state form can be moved ahead (digested only)
 	minConfidence float64
 	warm          bool
 	verbose       bool
@@ -358,7 +389,7 @@ func (b *bot) loop(ctx context.Context) error {
 		seen, decided := ahead(s.State, lead), min(lead, 1)
 		p := b.build(seen, b.ages.slowest(), decided)
 		go func() {
-			a := answer{run: s.RunID, tick: s.Tick, lane: s.Lane, state: p.state, seen: seen, decided: decided}
+			a := answer{run: s.RunID, tick: s.Tick, lane: s.Lane, state: p.state, seen: seen, decided: decided, variants: p.variants}
 			a.decision, a.err = b.model.decide(ctx, p)
 			answers <- a
 		}()
@@ -392,6 +423,7 @@ func (b *bot) loop(ctx context.Context) error {
 				continue // the run it was about is over
 			}
 			age := latest.Tick - a.tick
+			a.choose(age)
 			// The question allowed for the slowest recent answer. The
 			// check before sending goes by the usual one: holding a move
 			// for fear of one slow answer leaves the car where it is.

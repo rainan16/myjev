@@ -13,6 +13,21 @@ import (
 type prompt struct {
 	state        string
 	instructions string
+	// variants is set when one call asks the same question about the road
+	// at several moments ahead (see fanOut). Which answer counts is
+	// decided when the answer arrives and its age is known.
+	variants []variant
+}
+
+// variant is one premise of a fan-out: the road as it will be lead ticks
+// from now, the observation that describes, and the sentence the model
+// reads. The question about it is named by id.
+type variant struct {
+	lead     int
+	id       string
+	sentence string
+	seen     game.State
+	decided  int
 }
 
 var criteria = map[string]string{
@@ -65,6 +80,32 @@ func digested(s game.State, reaction, decided int) prompt {
 	free := clearTicks(s)
 	word := func(step int) string { return laneWord(s, free, step, reaction, decided) }
 	return prompt{state: sentence(word(-1), word(0), word(1)), instructions: digestedInstructions}
+}
+
+// fanOut asks about the road at every one of the leads in a single call.
+// How old an answer will be when it arrives is not known in advance, so
+// each question states its own premise: the road lead ticks from now.
+// Questions in one call run side by side and do not slow the call down,
+// and the answer whose lead is nearest the real age is the one used.
+func fanOut(s game.State, leads []int, reaction int) prompt {
+	state := make(map[string]string, len(leads))
+	p := prompt{instructions: digestedInstructions}
+	for _, lead := range leads {
+		seen, decided := ahead(s, lead), min(lead, 1)
+		v := variant{lead: lead, id: fmt.Sprintf("road_in_%d_ticks", lead), seen: seen, decided: decided}
+		v.sentence = digested(seen, reaction, decided).state
+		state[v.id] = v.sentence
+		p.variants = append(p.variants, v)
+	}
+	data, _ := json.Marshal(state) // cannot fail: plain strings
+	p.state = string(data)
+	return p
+}
+
+// variantInstructions is the question about one premise of a fan-out. The
+// state is a JSON object, and the backticked path says which part counts.
+func variantInstructions(v variant) string {
+	return fmt.Sprintf("For the road in `%s`: %s", v.id, digestedInstructions)
 }
 
 // ahead is the observation the car will have in the given number of
