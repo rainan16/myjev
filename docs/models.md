@@ -15,7 +15,7 @@ How it works:
 | How it is asked | State and a typed choice | State and a typed choice | State and a typed choice | Chat message, pinned to a move by a JSON schema, temperature 0, thinking off | Chat message, pinned to a move by a JSON schema, temperature 0 |
 | Reports a confidence | Yes | Yes | Yes | No | No |
 | Median latency | 250 to 340 ms, the same for every prompt | 55 ms on a repeated sentence, about 450 ms on a new one | 21 ms | about 250 ms | about 810 ms |
-| Seed 7, full pace, ticks survived | 1,735 (2,999 with three questions open) | 357 | 357 | 318 | 1,594 (764 with two or three questions open) |
+| Seed 7, full pace, ticks survived | 1,735; 3,202 in a later run (2,999 with three questions open) | 357 | 357 | 318 | 1,594 (764 with two or three questions open) |
 | Seeds 1 to 5, full pace, median ticks | 1,841 | 2,710 | 180 | 291 | not run |
 | Memory or cost | none locally; 1 to 2 cents a run at most | about 4.7 GB | about 1.0 GB | about 5.0 GB | none locally; under 2 cents a run |
 
@@ -71,7 +71,7 @@ It answers in text, which holds the move as JSON and has to be parsed a second t
 What stands out:
 
 - **The harness decides more than the model.** On the raw obstacle list no model got past the first few rows. With the digested sentence, the look-ahead and late moves, even Haiku at 0.8 seconds an answer drove for 1,594 ticks.
-- **Speed and judgment are separate.** `tev1:0.8b` is the only model fast enough for every tick and almost never moves. Haiku is the slowest by far and got about as far as Jev on seed 7.
+- **Speed and judgment are separate.** `tev1:0.8b` is the only model fast enough for every tick and almost never moves. Haiku is the slowest by far and still got about as far on seed 7 as Jev usually does.
 - **`tev1:4b` judges best overall.** It leads on four of five seeds and passed 2,700 ticks on three. Seed 7 is its bad seed: one answer to a new sentence takes 13 to 14 ticks, and there that one tick decides.
 - **Jev judges like `tev1:4b` and costs a round trip.** Its latency does not depend on the prompt, so asking it three questions at once helped on seed 7; it did not on the other seeds.
 - **A decision model needs less harness around the call.** It takes a state and a typed question and returns an option with a confidence. Gemma and Haiku answer in text and have to be pinned to a move by a schema and parsed.
