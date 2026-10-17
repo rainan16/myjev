@@ -145,6 +145,7 @@ Proposed defaults are in brackets. Confirm or change them in Phase 1.
 | The bot only moves when the move is right whether it lands on the next tick or one tick late, and never resends a move still in flight | The game is real-time, so a message can miss a tick |
 | The bot stops when someone else takes the car, and releases it on Ctrl-C | It should not fight the human for control |
 | Random seeds are 32-bit | Larger values lose precision in JavaScript JSON numbers |
+| The README stays short: play, watch a bot, let a model drive, write a bot, develop. Flags, the model bot, the comparison and its runs live in `docs/` (2026-10-17) | The README had grown to 450 lines, mostly model runs, and the way to play was below them |
 
 ## Risks
 - **Fairness with moving cars.** Slower cars move forward and can catch up with static obstacles ahead of them, so two rows that were each passable can merge into a wall. Options: give each row a single type and space rows so they cannot merge before passing the player, or despawn a car that reaches an obstacle. Decide in Phase 3 and let the solver test prove it.
