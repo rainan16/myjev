@@ -6,3 +6,4 @@
 .DS_Store
 /llmbot
 .env
+docs/*.pdf
