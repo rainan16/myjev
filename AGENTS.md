@@ -8,14 +8,16 @@ An OutRun-style four-lane dodger in Go. One binary runs the game headless and se
 |------|----------|
 | `cmd/outrun` | Server binary: flags, loopback check, wiring |
 | `cmd/bot` | Sample bot, a separate binary |
-| `cmd/llmbot` | Bot that lets a local Ollama model, hosted Jev or Claude Haiku drive; plans in `task_plan_tev.md` and `task_plan_jev.md` |
+| `cmd/llmbot` | Bot that lets a local Ollama model, hosted Jev or Claude Haiku drive; plans in `docs/planning/task_plan_tev.md` and `docs/planning/task_plan_jev.md` |
 | `internal/game` | Headless core: rules (`game.go`), observation (`state.go`), reference solver (`solver.go`) |
 | `internal/server` | HTTP and WebSocket handlers, real-time tick loop, controller arbitration |
 | `web` | Viewer (`index.html`, `viewer.js`), embedded with `go:embed` |
 | `docs/API.md` | The API contract |
-| `task_plan.md` | Decisions with their rationale, and a log of approaches that already failed |
+| `docs/*.md` | Details linked from `README.md`: running and flags, writing a bot, the model bot, the model comparison and its runs |
+| `docs/planning/task_plan.md` | Decisions with their rationale, and a log of approaches that already failed |
+| `docs/planning/` | The other plans, intent and decision notes, findings and progress logs |
 
-How to play is in `README.md`. Read `task_plan.md` before a larger change, and record new decisions and failed approaches there.
+How to play is in `README.md`, which stays short and links to the details in `docs/`. Read `docs/planning/task_plan.md` before a larger change, and record new decisions and failed approaches there.
 
 ## Setup commands
 
@@ -53,7 +55,7 @@ How to play is in `README.md`. Read `task_plan.md` before a larger change, and r
 - The viewer keeps a sprite on screen for as long as the core can still hit it. Hiding it earlier makes crashes look unfair.
 - Difficulty settings live in `DefaultConfig` in `internal/game/game.go`. Speed has no upper limit. Rows are kept apart in ticks (`MinGapTicks`) as well as in road distance, which is what keeps a fast run survivable, so change speed, spacing and tick rate together.
 - Do not retune the difficulty defaults unprompted. That is waiting on feedback from a human playing.
-- When endpoints, message types or the state JSON change, update `docs/API.md` and `README.md` in the same change. The viewer, the sample bot and outside bots all depend on that shape.
+- When endpoints, message types or the state JSON change, update `docs/API.md`, `docs/write-a-bot.md` and `README.md` in the same change. The viewer, the sample bot and outside bots all depend on that shape.
 
 ## Security considerations
 
