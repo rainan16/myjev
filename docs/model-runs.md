@@ -86,6 +86,12 @@ All four models once more with every change above in, seed 7, pace 1.0, one ques
 - **`tev1:0.8b` is unchanged**: 338 answers, none late, one move.
 - **`tev1:4b` with the check on the slowest answer again** also crashed at 357 in 3 of 3 runs, with the first move held where the median lets it through and holds the second. So the 1,594 above was the exception, and the change to the median is not what cost it.
 
+A later run of Jev with the same code (2026-10-17, seed 7, pace 1.0, one question) got much further: it crashed at tick 3,202, with 85 rows passed, a score of 8,502 and speed 109. It made 418 decisions, 3.9 per second, at a median of 243 ms (p95 320 ms); 83% of its answers were late and 37 late moves were still sent. It made 48 moves and used 158,338 input tokens.
+
+- **It passed the row at 1,735.** The question asked at tick 1,706 read `clear lane beyond` to the right, and Jev made both moves. In the earlier run that sentence read `blocked soon`, because one answer shortly before had taken 15 ticks; this time answers were 6 to 9 ticks old.
+- **The service was faster**: 243 ms median against 321 ms. That alone may account for the difference. It is one run, so it shows what the same setup can do on a good day, not a new typical result.
+- **It crashed in lane 0, by the wall**, with its own lane and the one to the right both reading `blocked now`. Jev answered `none` at confidence 0.46.
+
 ### Five more seeds
 
 Everything above is seed 7. The same harness on seeds 1 to 5 at pace 1.0, one run per cell, ticks survived, each run stopped after 100 seconds (3,000 ticks):
