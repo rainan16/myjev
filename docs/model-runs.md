@@ -88,6 +88,17 @@ All four models once more with every change above in, seed 7, pace 1.0, one ques
 
 A later run of Jev with the same code (2026-10-17, seed 7, pace 1.0, one question) got much further: it crashed at tick 3,202, with 85 rows passed, a score of 8,502 and speed 109. It made 418 decisions, 3.9 per second, at a median of 243 ms (p95 320 ms); 83% of its answers were late and 37 late moves were still sent. It made 48 moves and used 158,338 input tokens.
 
+Then the sixth change, `-leads`: one call asks the digested question about the road at several ticks ahead, here `-leads 4,7,10,13`, and the answer whose premise is nearest the real age of the reply is used. Jev, pace 1.0, one run each, the same day as one-question runs:
+
+| Seed | `-leads 4,7,10,13` | One question |
+|------|--------------------|--------------|
+| 7 | 3,202, 85 rows, 44 moves, 354,067 input tokens | 3,202, 85 rows, 48 moves, 158,338 input tokens |
+| 2 | 1,360, 29 rows | 1,863, 43 rows |
+| 11 | 4,017, 119 rows, score 11,676 | 1,452, 30 rows |
+
+- **One gain, one loss, one tie.** Single runs do not say whether it helps. It costs about 2.2 times the tokens.
+- **Not looked at:** why seed 2 stops where it does, and which premise was chosen; the log shows the sentence, not its lead.
+
 - **It passed the row at 1,735.** The question asked at tick 1,706 read `clear lane beyond` to the right, and Jev made both moves. In the earlier run that sentence read `blocked soon`, because one answer shortly before had taken 15 ticks; this time answers were 6 to 9 ticks old.
 - **The service was faster**: 243 ms median against 321 ms. That alone may account for the difference. It is one run, so it shows what the same setup can do on a good day, not a new typical result.
 - **It crashed in lane 0, by the wall**, with its own lane and the one to the right both reading `blocked now`. Jev answered `none` at confidence 0.46.

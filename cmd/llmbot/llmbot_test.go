@@ -992,3 +992,88 @@ func TestBotResetsOnceItIsShownDrivingAndPlaysTheNextRun(t *testing.T) {
 	cancel()
 	<-done
 }
+
+func TestFanOutAsksTheSameQuestionAboutEveryPremiseInOneCall(t *testing.T) {
+	o, path, request := stubOllama(t, http.StatusOK, `{"answers":{
+		"road_in_0_ticks":{"choice":"none","probabilities":{"left":0.1,"none":0.8,"right":0.1},"confidence":0.9},
+		"road_in_17_ticks":{"choice":"right","probabilities":{"left":0.1,"none":0.2,"right":0.7},"confidence":0.5}},
+		"usage":{"input_tokens":120}}`)
+	s := observation(1, 50, barrier(0, 30))
+
+	d, err := (&tev{o}).decide(context.Background(), fanOut(s, []int{0, 17}, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []choice{{"none", 0.9, 0.8}, {"right", 0.5, 0.7}}
+	if !reflect.DeepEqual(d.choices, want) || d.tokens != 120 {
+		t.Errorf("choices = %+v, tokens %d", d.choices, d.tokens)
+	}
+
+	var got struct {
+		State     map[string]string            `json:"state"`
+		Questions map[string]systemoneQuestion `json:"questions"`
+	}
+	if err := json.Unmarshal(*request, &got); err != nil {
+		t.Fatalf("state must be a JSON object: %v", err)
+	}
+	if *path != "/v1/systemone" || len(got.Questions) != 2 || len(got.State) != 2 {
+		t.Fatalf("request to %s = %s", *path, *request)
+	}
+	for id, q := range got.Questions {
+		if !strings.Contains(q.Instructions, "`"+id+"`") || got.State[id] == "" {
+			t.Errorf("question %s does not point at its premise: %+v", id, q)
+		}
+	}
+	if !strings.Contains(got.State["road_in_0_ticks"], "Lane to the left: blocked soon") ||
+		!strings.Contains(got.State["road_in_17_ticks"], "Lane to the left: blocked now") {
+		t.Errorf("premises not told apart: %v", got.State)
+	}
+}
+
+func TestFanOutAnswerUsedIsThatOfThePremiseNearestItsAge(t *testing.T) {
+	s := observation(1, 50, barrier(0, 30))
+	p := fanOut(s, []int{4, 8, 12}, 0)
+	a := answer{variants: p.variants}
+	a.choices = []choice{{"left", 0.9, 0.9}, {"right", 0.8, 0.8}, {"none", 0.7, 0.7}}
+
+	cases := map[int]string{0: "left", 5: "left", 6: "left", 7: "right", 9: "right", 11: "none", 40: "none"}
+	for age, want := range cases {
+		b := a
+		b.choose(age)
+		if b.action != want {
+			t.Errorf("age %d: action %s, want %s", age, b.action, want)
+		}
+	}
+
+	a.choose(8)
+	if a.seen.Tick != s.Tick+8 || a.decided != 1 || a.state != p.variants[1].sentence || !a.hasConfidence || a.confidence != 0.8 {
+		t.Errorf("answer was not judged on its premise: %+v", a)
+	}
+	var plain answer
+	plain.action = "left"
+	plain.choose(5)
+	if plain.action != "left" {
+		t.Error("an answer without variants was changed")
+	}
+}
+
+func TestFanOutReplyMissingAPremiseIsAnError(t *testing.T) {
+	o, _, _ := stubOllama(t, http.StatusOK, `{"answers":{"road_in_0_ticks":{"choice":"none","confidence":0.9}}}`)
+	if _, err := (&tev{o}).decide(context.Background(), fanOut(observation(1, 50), []int{0, 9}, 0)); err == nil {
+		t.Error("a reply without every premise was accepted")
+	}
+}
+
+func TestLeadsAreWholeTicksEachOnceNearestFirst(t *testing.T) {
+	if got, err := parseLeads("11, 5,8"); err != nil || !reflect.DeepEqual(got, []int{5, 8, 11}) {
+		t.Errorf("got %v, %v", got, err)
+	}
+	if got, err := parseLeads(""); err != nil || got != nil {
+		t.Errorf("empty: %v, %v", got, err)
+	}
+	for _, bad := range []string{"5,5", "x", "-1"} {
+		if _, err := parseLeads(bad); err == nil {
+			t.Errorf("%q was accepted", bad)
+		}
+	}
+}

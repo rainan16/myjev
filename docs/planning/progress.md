@@ -111,6 +111,7 @@ Plan: `task_plan_tev.md`. Branch: `tev-vs-gemma`.
 | `tev1:4b` on the new road, every fix | seed 7, pace 0.5 | reaches tick 2,700 | still driving at 2,763 | pass, one run |
 | `gemma4:e2b` on the new road, every fix | seed 7, pace 0.5 | reaches tick 2,700 | crashed at 767, moved into `blocked now` | fails on the model's move |
 | `tev1:0.8b` on the new road, every fix | seed 7, pace 0.5 | reaches tick 2,700 | crashed at 357, never answers `left` | fails on the model's move |
+| Jev with `-leads 4,7,10,13` against one question | seeds 7, 2, 11, pace 1.0, one run each | no worse | 3,202 / 1,360 / 4,017 against 3,202 / 1,863 / 1,452 | mixed, not shown to help |
 
 ## Error Log
 | Timestamp | Error | Attempt | Resolution |

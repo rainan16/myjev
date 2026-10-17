@@ -38,7 +38,30 @@ type answer struct {
 	// decided is 1 when seen was moved ahead to when the answer arrives,
 	// so the question counted its first move as decided; see digested.
 	decided int
+	// variants is what a fan-out asked; see choose.
+	variants []variant
 }
+
+// choose settles a fan-out answer once its age is known: the answer to
+// the question whose premise, the road lead ticks ahead, is nearest to
+// that age. On a tie the nearer premise counts. The answer is then judged
+// against the state of that premise like any other.
+func (a *answer) choose(age int) {
+	if len(a.variants) == 0 {
+		return
+	}
+	best := 0
+	for i, v := range a.variants {
+		if abs(v.lead-age) < abs(a.variants[best].lead-age) {
+			best = i
+		}
+	}
+	v, c := a.variants[best], a.choices[best]
+	a.action, a.hasConfidence, a.confidence, a.probability = c.action, true, c.confidence, c.probability
+	a.seen, a.decided, a.state = v.seen, v.decided, v.sentence
+}
+
+func abs(n int) int { return max(n, -n) }
 
 // judge decides what to do with an answer given where the game is now.
 // A move is checked against the newest state before it is sent: the

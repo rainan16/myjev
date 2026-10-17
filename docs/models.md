@@ -76,6 +76,7 @@ What stands out:
 - **Jev judges like `tev1:4b` and costs a round trip.** Its latency does not depend on the prompt, so asking it three questions at once helped on seed 7; it did not on the other seeds.
 - **A decision model needs less harness around the call.** It takes a state and a typed question and returns an option with a confidence. Gemma and Haiku answer in text and have to be pinned to a move by a schema and parsed.
 - **Gemma and `tev1:0.8b` stay under 410 ticks on every seed**, Gemma on wrong moves and late answers, `tev1:0.8b` by staying in lane.
+- **Asking about several moments ahead in one call (`-leads`) gave a mixed result.** On three seeds Jev did better on one, worse on one and the same on one, at about 2.2 times the tokens; one run each, so it is not shown to help.
 - **More open questions are not a general fix.** They slow a local model, because the calls share one runner, and they made Haiku worse: asked more often, it moved when no lane was clear and steered into the wall.
 
 
