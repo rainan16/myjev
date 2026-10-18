@@ -1,6 +1,6 @@
 # Four kinds of model at the wheel
 
-The game is also a test bench. `cmd/llmbot` lets a model drive, and the same question was put to two decision models (Jev, hosted, and its local version Tev in two sizes) and two general-purpose LLMs (Gemma, local, and Claude Haiku, hosted).
+The game is also a test bench. `cmd/llmbot` lets a model drive, and the same question was put to three decision models (Jev, hosted, its local version Tev in two sizes, and Nimble, local) and two general-purpose LLMs (Gemma, local, and Claude Haiku, hosted).
 
 How it works:
 
@@ -8,16 +8,16 @@ How it works:
 - **The model judges, the harness calculates.** The model is not shown distances and speeds but one sentence worked out in Go, such as `Lane to the left: blocked soon. Current lane: clear. Lane to the right: wall.`
 - **The harness allows for the model's answer time.** The sentence describes the road as it will be when the answer arrives, and a move is checked against the newest state before it is sent. A late answer is still used if its lane has not got worse.
 
-| | `jev-1.13.0` | `tev1:4b` | `tev1:0.8b` | `gemma4:e2b` | `claude-haiku-4-5` |
-|---|---|---|---|---|---|
-| Kind | Decision model | Decision model | Decision model | General-purpose LLM | General-purpose LLM |
-| Runs | Hosted (TypeSafe) | Local (Ollama) | Local (Ollama) | Local (Ollama) | Hosted (Anthropic) |
-| How it is asked | State and a typed choice | State and a typed choice | State and a typed choice | Chat message, pinned to a move by a JSON schema, temperature 0, thinking off | Chat message, pinned to a move by a JSON schema, temperature 0 |
-| Reports a confidence | Yes | Yes | Yes | No | No |
-| Median latency | 250 to 340 ms, the same for every prompt | 55 ms on a repeated sentence, about 450 ms on a new one | 21 ms | about 250 ms | about 810 ms |
-| Seed 7, full pace, ticks survived | 1,735; 3,202 in a later run (2,999 with three questions open) | 357 | 357 | 318 | 1,594 (764 with two or three questions open) |
-| Seeds 1 to 5, full pace, median ticks | 1,841 | 2,710 | 180 | 291 | not run |
-| Memory or cost | none locally; 1 to 2 cents a run at most | about 4.7 GB | about 1.0 GB | about 5.0 GB | none locally; under 2 cents a run |
+| | `jev-1.13.0` | `tev1:4b` | `nimble-v3:9b-mxfp8` | `tev1:0.8b` | `gemma4:e2b` | `claude-haiku-4-5` |
+|---|---|---|---|---|---|---|
+| Kind | Decision model | Decision model | Decision model | Decision model | General-purpose LLM | General-purpose LLM |
+| Runs | Hosted (TypeSafe) | Local (Ollama) | Local (Ollama, MLX) | Local (Ollama) | Local (Ollama) | Hosted (Anthropic) |
+| How it is asked | State and a typed choice | State and a typed choice | State and a typed choice | State and a typed choice | Chat message, pinned to a move by a JSON schema, temperature 0, thinking off | Chat message, pinned to a move by a JSON schema, temperature 0 |
+| Reports a confidence | Yes | Yes | Yes | Yes | No | No |
+| Median latency | 250 to 340 ms, the same for every prompt | 55 ms on a repeated sentence, about 450 ms on a new one | 3 ms on a repeated sentence, about 900 ms on a new one | 21 ms | about 250 ms | about 810 ms |
+| Seed 7, full pace, ticks survived | 1,735; 3,202 in a later run (2,999 with three questions open) | 357 | 1,225; 3,468 and still driving with `-warm` | 357 | 318 | 1,594 (764 with two or three questions open) |
+| Seeds 1 to 5, full pace, median ticks | 1,841 | 2,710 | 1,863 (541 to 4,444); with `-warm` past 3,000 on every seed | 180 | 291 | not run |
+| Memory or cost | none locally; 1 to 2 cents a run at most | about 4.7 GB | 13 GB with a 32k context | about 1.0 GB | about 5.0 GB | none locally; under 2 cents a run |
 
 Ticks survived are single runs with the current harness and one question open at a time; 2,700 ticks is 90 seconds of game time.
 
@@ -72,7 +72,8 @@ What stands out:
 
 - **The harness decides more than the model.** On the raw obstacle list no model got past the first few rows. With the digested sentence, the look-ahead and late moves, even Haiku at 0.8 seconds an answer drove for 1,594 ticks.
 - **Speed and judgment are separate.** `tev1:0.8b` is the only model fast enough for every tick and almost never moves. Haiku is the slowest by far and still got about as far on seed 7 as Jev usually does.
-- **`tev1:4b` judges best overall.** It leads on four of five seeds and passed 2,700 ticks on three. Seed 7 is its bad seed: one answer to a new sentence takes 13 to 14 ticks, and there that one tick decides.
+- **Without warm-up, `tev1:4b` judges best.** It leads on four of five seeds and passed 2,700 ticks on three. Seed 7 is its bad seed: one answer to a new sentence takes 13 to 14 ticks, and there that one tick decides.
+- **Nimble, warmed up, drives best of all.** It is the fastest model on a sentence it has seen and one of the slowest on a new one, and without warm-up every short run ended on a new sentence, with an answer 25 to 29 ticks old. With `-warm` it asks all 72 sentences before driving, never answers late, and passed 3,000 ticks on every seed it was run on. Warm-up does nothing for `tev1:4b`, which is fast only on a prompt that repeats the one before it.
 - **Jev judges like `tev1:4b` and costs a round trip.** Its latency does not depend on the prompt, so asking it three questions at once helped on seed 7; it did not on the other seeds.
 - **A decision model needs less harness around the call.** It takes a state and a typed question and returns an option with a confidence. Gemma and Haiku answer in text and have to be pinned to a move by a schema and parsed.
 - **Gemma and `tev1:0.8b` stay under 410 ticks on every seed**, Gemma on wrong moves and late answers, `tev1:0.8b` by staying in lane.

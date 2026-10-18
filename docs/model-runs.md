@@ -2,6 +2,39 @@
 
 The runs behind the figures in [Four kinds of model at the wheel](models.md), newest model first. How the bot and its flags work is in [Let a model drive](llmbot.md). Every figure is a single run, and the same setup can give a different result on the next run.
 
+## Nimble
+
+`nimble-v3:9b-mxfp8` (Bespoke-Nimble-9B-v3, a decision model on Ollama's MLX runner) on 2026-10-18, pace 1.0, one question at a time, alone in Ollama, the same harness as the five-seed table under Hosted Jev. One run per seed, run in this order on one server, so the model had seen more sentences on each later seed:
+
+| Seed | Ticks | Rows | Moves | Answers over 200 ms |
+|------|-------|------|-------|---------------------|
+| 7 | 1,225 | 24 | 7 | 28 |
+| 1 | 642 | 11 | 3 | 3 |
+| 2 | 1,863 | 43 | 28 | 7 |
+| 3 | 4,444 | 138 | 79 | 2 |
+| 4 | 541 | 9 | 5 | 1 |
+| 5 | 3,391, stopped while still driving | 92 | 53 | 0 |
+
+Seed 3 was meant to be stopped after 100 seconds like the others and was not; it was past 3,000 ticks at that point. Median over seeds 1 to 5: 1,863, against 2,710 for `tev1:4b` and 1,841 for Jev.
+
+Then the four seeds it had lost, again with `-warm`, which asks all 72 sentences once before driving (22.5 s on the first run, under a second after that), each run stopped after 115 to 138 seconds:
+
+| Seed | Without `-warm` | With `-warm` |
+|------|-----------------|--------------|
+| 7 | 1,225 | 3,468, still driving, speed 114 |
+| 1 | 642 | 4,111, still driving, speed 126 |
+| 2 | 1,863 | 3,981, still driving, speed 124 |
+| 4 | 541 | 4,142, still driving, speed 127 |
+
+- **With `-warm` it lost none of them.** No answer was late in any of the four runs, the median answer took 3 to 6 ms and the p95 8 ms, and it sent 52 to 85 moves a run. Seeds 3 and 5 got past 3,000 ticks without it, so Nimble passed 3,000 ticks on all six seeds, the first model to do so at full pace.
+- **Warm-up works here and not for `tev1:4b`.** Tev on the standard runner is fast only when a prompt repeats the one before it, and asking every sentence in advance bought it nothing (see `docs/planning/findings.md`). Nimble on the MLX runner stays fast on every sentence it has seen.
+- About 950,000 input tokens per run, all local.
+
+- **It is fast on a sentence it has seen and slow on a new one.** Median 3 ms; the first answer to a sentence took 840 to 970 ms, 25 to 29 ticks. That is the same shape as `tev1:4b` (55 ms and 450 ms), at both ends further apart.
+- **Every crash followed a new sentence.** On seeds 7 and 4 the last answer was a `left` towards a clear lane, 26 and 29 ticks old, and was held because that lane had got worse meanwhile. On seed 1 the last answer was 25 ticks old.
+- **When it is on time it judges well.** None of the 175 moves it sent went into a lane that read `blocked now` or into the wall, and on seeds 3 and 5 it drove past speed 110 with almost no late answers.
+- **Memory**: `ollama ps` reports 13 GB with its 32,768-token context. The bot's summary says about 970 MB, because the MLX runner keeps the weights in GPU memory, which the process's resident size does not count.
+
 ## Claude Haiku
 
 One run on seed 7 at pace 1.0 (2026-10-04): crashed at tick 1,594 with 33 rows passed and a score of 3,441. It answered 62 times, 1.2 per second, median 813 ms, so every answer was late (21 to 32 ticks old); 10 were moves and all 10 were still sent, none unusable. 15,880 input tokens, under $0.02. That is the tick `tev1:4b` crashed at on the same seed and pace; Gemma got to 318 and Jev to 1,735. A single run, and the same setup varies from run to run.

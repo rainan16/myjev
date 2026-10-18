@@ -33,6 +33,7 @@ Plan: `task_plan_tev.md`. Detailed figures are in its Notes; this file is the ru
 ### Phase 3 (comparison harness, 2026-10-04)
 - `tev1:0.8b` never answers `left`: 0 of 29 across 13 wordings, key orders and sentence orders. Mentioning `right` first makes it stop answering `right` too. It is a position habit of the small model, not a wording problem
 - Ollama's fast path differs by model. `tev1:0.8b` answers any of the 140 sentences fast once it has seen it. `tev1:4b` is fast only when the prompt equals the previous one; warm-up over all sentences bought nothing and cost 68 s
+- `nimble-v3:9b-mxfp8` on Ollama's MLX runner (2026-10-18) answers any sentence it has seen in 3 to 8 ms and a new one in 840 to 970 ms. `-warm` makes all 72 sentences fast: without it, it crashed on four of six seeds after a late answer to a new sentence; with it, it passed 3,000 ticks on all four. `ps` RSS shows about 950 MB because MLX keeps the weights in GPU memory; `ollama ps` says 13 GB
 - So for `tev1:4b` every change of situation costs 420 to 500 ms, 13 to 15 ticks at pace 1.0, and that answer is dropped as stale. It then asks again and gets the answer in 52 ms. A change is acted on about 16 ticks late
 - Gemma at pace 1.0: 248 ms per answer is 7 to 9 ticks, so with `-max-stale 6` every answer is dropped. It never steered
 - `blocked later` with the longer instruction did not help: 0.8b stopped moving at all, 4b moved out of a `blocked later` lane into a `blocked soon, clear lane beyond` one and crashed there

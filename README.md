@@ -47,11 +47,11 @@ go run ./cmd/llmbot -backend anthropic -seed 7  # Claude Haiku, needs ANTHROPIC_
 
 The hosted backends send the game state to their provider on every decision. Setup, flags and how the bot asks the model are in [Let a model drive](docs/llmbot.md).
 
-The game is also a test bench: two decision models (Jev and its local version Tev) and two general-purpose LLMs (Gemma and Claude Haiku) were given the same question. In short:
+The game is also a test bench: three decision models (Jev, its local version Tev, and Nimble) and two general-purpose LLMs (Gemma and Claude Haiku) were given the same question. In short:
 
 - **The harness decides more than the model.** Given the raw obstacle list no model got past the first few rows. Given one sentence worked out in Go, such as `Lane to the left: blocked soon. Current lane: clear. Lane to the right: wall.`, they drive.
 - **Speed and judgment are separate.** The fastest model, `tev1:0.8b`, almost never moves. Haiku is the slowest by far and still got about as far on seed 7 as Jev usually does.
-- **`tev1:4b` judges best overall**, and a decision model needs less code around the call than a general-purpose LLM, which answers in text that has to be pinned down and parsed.
+- **Nimble, warmed up, drove furthest**: it passed 3,000 ticks on every seed it was run on. Without warm-up `tev1:4b` judges best. A decision model needs less code around the call than a general-purpose LLM, which answers in text that has to be pinned down and parsed.
 
 The comparison table and the requests side by side are in [Four kinds of model at the wheel](docs/models.md), and every run behind it in [Model runs](docs/model-runs.md). It is a quick look, not a benchmark: one run per figure.
 
