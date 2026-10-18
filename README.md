@@ -4,6 +4,19 @@ A small OutRun-style lane dodger with a local API. You drive a car down a four-l
 
 It is one Go binary: the game runs headless inside it, and the browser page is just another client of the same API.
 
+It is also a test bench for models that have to decide 30 times a second. Six models have driven it so far, best first:
+
+| Model | Kind | Runs on | Answer time | Ticks survived at full pace |
+|-------|------|---------|-------------|-----------------------------|
+| `nimble-v3:9b-mxfp8` | Decision model | Local, Ollama, 13 GB | 3 ms on a sentence it has seen, about 900 ms on a new one | Past 3,000 on all six seeds tried, with `-warm` |
+| `tev1:4b` | Decision model | Local, Ollama, 4.7 GB | 55 ms on a repeated sentence, about 450 ms on a new one | Median 2,710 on seeds 1 to 5; 357 on seed 7 |
+| `jev-1.13.0` | Decision model | Hosted, TypeSafe | 250 to 340 ms | Median 1,841 on seeds 1 to 5; up to 3,202 on seed 7 |
+| `claude-haiku-4-5` | General-purpose LLM | Hosted, Anthropic | about 810 ms | 1,594 on seed 7 |
+| `gemma4:e2b` | General-purpose LLM | Local, Ollama, 5.0 GB | about 250 ms | Median 291 on seeds 1 to 5 |
+| `tev1:0.8b` | Decision model | Local, Ollama, 1.0 GB | 21 ms | Median 180 on seeds 1 to 5 |
+
+A tick is 1/30 of a second, so 3,000 ticks is 100 seconds of driving at a speed that keeps rising. Every figure is a single run. How the models are asked is in [Let a model drive](#let-a-model-drive), and the details are in [Four kinds of model at the wheel](docs/models.md).
+
 ## Play
 
 Needs Go 1.26 or newer.
