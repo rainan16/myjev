@@ -2,6 +2,38 @@
 
 The runs behind the figures in [Four kinds of model at the wheel](models.md), newest model first. How the bot and its flags work is in [Let a model drive](llmbot.md). Every figure is a single run, and the same setup can give a different result on the next run.
 
+## Tev, pulled again
+
+Ollama 0.40.5 refuses the old Tev downloads ("a format that is no longer supported"), so both sizes were pulled again on 2026-10-18. Both now run on the MLX runner, and both are different builds from the ones in the sections further down:
+
+| | `tev1:4b` old | `tev1:4b` new | `tev1:0.8b` old | `tev1:0.8b` new |
+|---|---|---|---|---|
+| Build | ID `9b5bb969e46c` | ID `4d24c6f6d61a`, MXFP8 | standard runner | 1.5 GB download, 2,048-token context |
+| Memory | about 4.7 GB | about 11.4 GB | about 1.0 GB | about 2.0 GB |
+| Seen sentence | 55 ms, only when it repeats the one before | 5 ms, any it has seen | 21 ms | 5 ms |
+| New sentence | about 450 ms | about 430 ms | not measured | not measured |
+
+`tev1:4b`, pace 1.0, one question at a time, alone in Ollama, the same harness as the five-seed table under Hosted Jev. A probe over all 72 sentences ran first, so every sentence had been seen and no answer was late. Runs with `-min-confidence 0.3` were stopped after 100 seconds:
+
+| Seed | Old build | New build | New build, `-min-confidence 0.3` |
+|------|-----------|-----------|----------------------------------|
+| 7 | 357 | 201 | still driving when stopped |
+| 1 | 1,578 | 828 | still driving when stopped |
+| 2 | 1,863 | 763 | still driving when stopped |
+| 3 | 2,992, still driving | 694 | still driving when stopped |
+| 4 | 2,710 | 94 | still driving when stopped |
+| 5 | 2,992, still driving | 1,068 | still driving when stopped |
+| Median, seeds 1 to 5 | 2,710 | 763 | 3,400 or more |
+
+The gated runs ended between 3,400 and 3,426 ticks, 93 to 99 rows, at speed 113. Per run, 87 to 145 moves were held for low confidence and 50 to 80 were sent.
+
+- **The new build judges the moves it has to make.** On the 72 sentences it made all 32 moves that were needed, left and right.
+- **It also moves where no lane is open.** Seeds 7, 4 and 3 ended the same way: `left: blocked now, current: blocked soon, right: blocked now` answered `right` (p 0.56, confidence 0.28), into the obstacle alongside. The recheck before sending does not hold that move, because a lane that already reads `blocked now` cannot get worse.
+- **Those wrong moves are the ones it is unsure of**, so `-min-confidence 0.3` took it past 3,400 ticks on all six seeds, as far as Nimble with `-warm`. The old build was different: at pace 0.25 a 0.5 gate cost it a crash.
+- **`tev1:0.8b` drives as before.** On seed 7 at pace 1.0 it crashed at tick 357 after one move. It never moves towards the lane the sentence names first, whatever the lanes are called; asked yes/no whether the left lane is clear, it was right in 70 of 72 (see `docs/planning/findings.md`).
+
+The other Tev figures on this page and in [Four kinds of model at the wheel](models.md) are from the old builds.
+
 ## Nimble
 
 `nimble-v3:9b-mxfp8` (Bespoke-Nimble-9B-v3, a decision model on Ollama's MLX runner) on 2026-10-18, pace 1.0, one question at a time, alone in Ollama, the same harness as the five-seed table under Hosted Jev. One run per seed, run in this order on one server, so the model had seen more sentences on each later seed:
@@ -33,7 +65,7 @@ Then the four seeds it had lost, again with `-warm`, which asks all 72 sentences
 - **It is fast on a sentence it has seen and slow on a new one.** Median 3 ms; the first answer to a sentence took 840 to 970 ms, 25 to 29 ticks. That is the same shape as `tev1:4b` (55 ms and 450 ms), at both ends further apart.
 - **Every crash followed a new sentence.** On seeds 7 and 4 the last answer was a `left` towards a clear lane, 26 and 29 ticks old, and was held because that lane had got worse meanwhile. On seed 1 the last answer was 25 ticks old.
 - **When it is on time it judges well.** None of the 175 moves it sent went into a lane that read `blocked now` or into the wall, and on seeds 3 and 5 it drove past speed 110 with almost no late answers.
-- **Memory**: `ollama ps` reports 13 GB with its 32,768-token context. The bot's summary says about 970 MB, because the MLX runner keeps the weights in GPU memory, which the process's resident size does not count.
+- **Memory**: `ollama ps` reports 13 GB with its 32,768-token context. The bot's summary said about 970 MB in these runs, because the MLX runner keeps the weights in GPU memory, which the process's resident size does not count. The summary now takes the larger of the resident size and the macOS footprint, and reads 10.6 GB for Nimble early in a run; for Gemma on the llama.cpp runner the resident size is still the larger figure.
 
 ## Claude Haiku
 

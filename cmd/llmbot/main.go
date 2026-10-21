@@ -276,7 +276,7 @@ func (b *bot) memory() runnerMemory {
 	if b.hosted {
 		return runnerMemory{hosted: true}
 	}
-	return runnerRSS()
+	return readRunnerMemory()
 }
 
 // lead is how many ticks ahead of now the model is asked about.
