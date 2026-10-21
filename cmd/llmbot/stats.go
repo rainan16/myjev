@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os/exec"
+	"path"
 	"slices"
 	"strconv"
 	"strings"
@@ -223,7 +224,7 @@ func (st *stats) summary(s state, crashed bool, elapsed time.Duration, mem runne
 	return b.String()
 }
 
-// runnerMemory is the resident memory of Ollama's model runner
+// runnerMemory is the memory of Ollama's model runner
 // processes. Each loaded model has its own runner.
 type runnerMemory struct {
 	mb        int
@@ -231,31 +232,80 @@ type runnerMemory struct {
 	hosted    bool // the model runs elsewhere; there is nothing to read
 }
 
-// runnerRSS reads the memory of Ollama's model runners. /api/ps is not
-// used: it reports far less than the process holds.
-func runnerRSS() runnerMemory {
-	out, err := exec.Command("ps", "-axo", "rss=,command=").Output()
+// readRunnerMemory reads the memory of Ollama's model runners. /api/ps is
+// not used: it reports far less than the process holds.
+func readRunnerMemory() runnerMemory {
+	out, err := exec.Command("ps", "-axo", "pid=,rss=,command=").Output()
 	if err != nil {
 		return runnerMemory{}
 	}
-	return parseRunnerRSS(string(out))
+	return parseRunners(string(out), physFootprint)
 }
 
-// parseRunnerRSS adds up the runner processes in the output of
-// `ps -axo rss=,command=`.
-func parseRunnerRSS(ps string) runnerMemory {
+// parseRunners adds up the runner processes in the output of
+// `ps -axo pid=,rss=,command=`. Each runner counts with the larger of its
+// resident size and its footprint (bytes, 0 if unknown): the llama.cpp
+// runner maps the weights from the file, which the resident size counts
+// and the footprint does not, and the MLX runner holds them in GPU
+// memory, which the footprint counts and the resident size does not.
+func parseRunners(ps string, footprint func(pid int) int) runnerMemory {
 	var mem runnerMemory
 	kb := 0
 	for line := range strings.Lines(ps) {
-		rss, command, ok := strings.Cut(strings.TrimSpace(line), " ")
-		if !ok || !(strings.Contains(command, "llama-server") || strings.Contains(command, "ollama runner")) {
+		fields := strings.Fields(line)
+		if len(fields) < 3 {
 			continue
 		}
-		if n, err := strconv.Atoi(rss); err == nil {
-			kb += n
-			mem.processes++
+		if !isRunner(fields[2:]) {
+			continue
 		}
+		pid, err1 := strconv.Atoi(fields[0])
+		rss, err2 := strconv.Atoi(fields[1])
+		if err1 != nil || err2 != nil {
+			continue
+		}
+		kb += max(rss, footprint(pid)/1024)
+		mem.processes++
 	}
 	mem.mb = kb / 1024
 	return mem
+}
+
+// isRunner reports whether a command line starts a model runner: the
+// llama.cpp server, or `ollama runner`. Only the program and its first
+// argument count, so a shell whose arguments mention a runner is not one.
+func isRunner(args []string) bool {
+	switch path.Base(args[0]) {
+	case "llama-server":
+		return true
+	case "ollama":
+		return len(args) > 1 && args[1] == "runner"
+	}
+	return false
+}
+
+// physFootprint is the footprint of a process in bytes as macOS's
+// footprint tool reports it, or 0 where the tool is missing or fails.
+func physFootprint(pid int) int {
+	out, err := exec.Command("footprint", "-p", strconv.Itoa(pid), "--noCategories", "-f", "bytes").Output()
+	if err != nil {
+		return 0
+	}
+	return parsePhysFootprint(string(out))
+}
+
+// parsePhysFootprint reads the `phys_footprint: N B` line of footprint's
+// output.
+func parsePhysFootprint(out string) int {
+	for line := range strings.Lines(out) {
+		value, ok := strings.CutPrefix(strings.TrimSpace(line), "phys_footprint:")
+		if !ok {
+			continue
+		}
+		n, err := strconv.Atoi(strings.TrimSuffix(strings.TrimSpace(value), " B"))
+		if err == nil {
+			return n
+		}
+	}
+	return 0
 }

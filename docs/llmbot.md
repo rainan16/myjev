@@ -26,7 +26,16 @@ The game does not wait for the model. One question is open at a time, unless `-q
 | `-backend` | `ollama` | Where the model runs: `ollama`, `typesafe` for hosted Jev, or `anthropic` for Claude Haiku (see below) |
 | `-addr`, `-name`, `-seed`, `-runs`, `-pause` | | As for the sample bot; the name defaults to the model name |
 
-At the end of each run it prints ticks survived, rows passed, score, decisions per second, latency, how many answers were late or held because the lane got worse, and the memory of Ollama's model runner.
+At the end of each run it prints ticks survived, rows passed, score, decisions per second, latency, how many answers were late or held because the lane got worse, and the memory of Ollama's model runner: the larger of its resident size and, on macOS, its footprint, so that the weights count both when the llama.cpp runner maps them from the file and when the MLX runner holds them in GPU memory.
+
+## Gotchas
+
+- **Tev has to be pulled again on Ollama 0.40.5.** It refuses the old `tev1:0.8b` and `tev1:4b` downloads with "a format that is no longer supported". The builds `ollama pull` fetches now run on the MLX runner and are not the models the figures in these docs were measured on: `tev1:4b` holds about 11.4 GB instead of 4.7 GB and, at full pace, crashed far earlier than the old build unless run with `-min-confidence 0.3`. Details are in `docs/planning/findings.md`.
+- **The recheck cannot hold a move into a lane that already reads `blocked now`**, because that lane cannot get worse. A model that moves when no lane is open drives into the obstacle alongside. `-min-confidence` is what stops it, where the model's wrong moves are the ones it is unsure of.
+- **`-warm` helps only where a seen sentence is fast.** Nimble on the MLX runner answers any sentence it has seen in a few milliseconds, so asking all 72 first removes every late answer. The old `tev1:4b` was fast only on a prompt that repeated the one before, and warm-up bought it nothing.
+- **Load one model at a time.** The memory in the summary adds up every runner Ollama has loaded, and a second model also costs the first one time. Unload the others with `ollama stop <model>` before a run.
+- **The memory figure is not `ollama ps`.** `ollama ps` reports what Ollama planned for the model and its context; the bot reports what the runner process holds. The footprint is read with macOS's `footprint` tool; elsewhere only the resident size is counted, which misses weights held in GPU memory.
+- **Stop a run with SIGINT**: Ctrl-C, or `pkill -INT -x llmbot` from a script. That releases the car and prints the summary. Other signals end the bot without a summary, and a signal sent to `go run` reaches the `go` command rather than the bot it started, so a time limit set with something like `perl -e 'alarm …; exec …'` leaves the bot running.
 
 ## Claude Haiku
 

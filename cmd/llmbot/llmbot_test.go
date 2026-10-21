@@ -905,18 +905,67 @@ func TestStatusTextNamesStateFormLatencyAndConfidence(t *testing.T) {
 }
 
 func TestRunnerMemoryIsReadFromTheRunnerProcess(t *testing.T) {
-	ps := `  41152 ollama serve
-5327392 /opt/homebrew/Cellar/ollama/0.35.1_1/libexec/lib/ollama/llama-server --model /Users/x/.ollama/models/blobs/sha256-6dd7 --port 51234
-   1024 /usr/bin/some-editor llama-notes.txt
+	ps := `77450   41152 ollama serve
+97787 5327392 /opt/homebrew/Cellar/ollama/0.35.1_1/libexec/lib/ollama/llama-server --model /Users/x/.ollama/models/blobs/sha256-6dd7 --port 51234
+  412    1024 /usr/bin/some-editor llama-notes.txt
 `
-	if got := parseRunnerRSS(ps); got != (runnerMemory{mb: 5327392 / 1024, processes: 1}) {
+	none := func(int) int { return 0 }
+	if got := parseRunners(ps, none); got != (runnerMemory{mb: 5327392 / 1024, processes: 1}) {
 		t.Errorf("rss = %+v", got)
 	}
-	if got := parseRunnerRSS(ps + "1048576 /opt/ollama/llama-server --model other\n"); got != (runnerMemory{mb: 5327392/1024 + 1024, processes: 2}) {
+	if got := parseRunners(ps+"97900 1048576 /opt/ollama/llama-server --model other\n", none); got != (runnerMemory{mb: 5327392/1024 + 1024, processes: 2}) {
 		t.Errorf("two runners: rss = %+v", got)
 	}
-	if got := parseRunnerRSS("  41152 ollama serve\n"); got.processes != 0 {
+	if got := parseRunners("77450 41152 ollama serve\n", none); got.processes != 0 {
 		t.Errorf("no runner: rss = %+v", got)
+	}
+}
+
+func TestShellMentioningARunnerIsNotCounted(t *testing.T) {
+	ps := `99725    3136 /bin/zsh -c for P in $(pgrep -f "ollama runner|llama-server"); do footprint -p $P; done
+99729     144 ugrep -E llama-server|ollama runner
+99606 1359792 /opt/homebrew/Cellar/ollama/0.40.5/libexec/ollama runner --model tev1:0.8b --port 49176
+`
+	if got := parseRunners(ps, func(int) int { return 0 }); got != (runnerMemory{mb: 1359792 / 1024, processes: 1}) {
+		t.Errorf("rss = %+v, want only the runner", got)
+	}
+}
+
+func TestMLXRunnerCountsItsGPUMemory(t *testing.T) {
+	// The MLX runner holds the weights in GPU memory, so its resident
+	// size (about 1 GB) is far below what it holds (12 GB).
+	ps := "97201 969568 /opt/homebrew/Cellar/ollama/0.40.5/libexec/ollama runner --model nimble-v3:9b-mxfp8 --port 62383\n"
+	footprint := func(pid int) int {
+		if pid != 97201 {
+			t.Errorf("footprint asked for pid %d", pid)
+		}
+		return 12 << 30
+	}
+	if got := parseRunners(ps, footprint); got != (runnerMemory{mb: 12 << 10, processes: 1}) {
+		t.Errorf("mlx = %+v, want 12288 MB", got)
+	}
+	// The llama.cpp runner maps the weights from the file: there the
+	// resident size is the larger figure and is kept.
+	ps = "97787 5143440 /opt/homebrew/Cellar/ollama/0.40.5/libexec/lib/ollama/llama-server --model x\n"
+	if got := parseRunners(ps, func(int) int { return 1577177864 }); got != (runnerMemory{mb: 5143440 / 1024, processes: 1}) {
+		t.Errorf("llama.cpp = %+v", got)
+	}
+}
+
+func TestPhysFootprintIsReadFromFootprintOutput(t *testing.T) {
+	out := `======================================================================
+llama-server [97787]: 64-bit    Footprint: 1577177864 B (16384 bytes per page)
+======================================================================
+
+Auxiliary data:
+    phys_footprint: 1577177864 B
+    phys_footprint_peak: 1582879496 B
+`
+	if got := parsePhysFootprint(out); got != 1577177864 {
+		t.Errorf("footprint = %d", got)
+	}
+	if got := parsePhysFootprint("footprint: Unable to find pid\n"); got != 0 {
+		t.Errorf("no footprint = %d", got)
 	}
 }
 
